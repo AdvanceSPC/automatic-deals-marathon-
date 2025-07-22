@@ -63,7 +63,7 @@ export async function fetchCSVFromS3(fileName) {
             genero_edad: row.genero_edad || null,
             agrupador_categoria: row.agrupador_categoria || null,
             actividad: row.actividad || null,
-            talla__codigo_: row.talla__codigo_ || null,
+            talla_codigo: row.talla__codigo_ || null,
             nombre_campana: row.nombre_campana || null,
             amount: row.amount || null,
             dealstage: row.dealstage || null,
@@ -74,7 +74,7 @@ export async function fetchCSVFromS3(fileName) {
               types: [
                 {
                   associationCategory: "HUBSPOT_DEFINED",
-                  associationTypeId: 3 
+                  associationTypeId: 3 // Deal to Contact association
                 }
               ],
               to: {
