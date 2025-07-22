@@ -41,6 +41,7 @@ export async function fetchCSVFromS3(fileName) {
     stream
       .pipe(csv({ separator: ";" }))
       .on("data", (row) => {
+        // Verificar si existe contact_id para la asociación
         if (!row.contact_id) {
           console.warn(`⚠️ Negocio sin contact_id: ${row.linea || 'Sin nombre'} - No se subirá porque no existe contacto para asociar`);
           return;
@@ -62,7 +63,7 @@ export async function fetchCSVFromS3(fileName) {
             genero_edad: row.genero_edad || null,
             agrupador_categoria: row.agrupador_categoria || null,
             actividad: row.actividad || null,
-            talla_codigo: row.talla__codigo_ || null,
+            // talla_codigo: row.talla__codigo_ || null, // Propiedad comentada - no existe en HubSpot
             nombre_campana: row.nombre_campana || null,
             amount: row.amount || null,
             dealstage: row.dealstage || null,
@@ -73,7 +74,7 @@ export async function fetchCSVFromS3(fileName) {
               types: [
                 {
                   associationCategory: "HUBSPOT_DEFINED",
-                  associationTypeId: 3
+                  associationTypeId: 3 // Deal to Contact association
                 }
               ],
               to: {
