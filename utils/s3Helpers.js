@@ -77,7 +77,9 @@ export async function fetchCSVFromS3(fileName) {
                 }
               ],
               to: {
-                id: row.contact_id
+                id: row.contact_id,
+                type: "contact",
+                idProperty: "contact_id"
               }
             }
           ]

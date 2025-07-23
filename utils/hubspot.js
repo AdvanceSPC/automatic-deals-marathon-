@@ -7,7 +7,7 @@ const BATCH_SIZE = 100;
 export async function sendToHubspot(deals) {
   const apiKey = process.env.HUBSPOT_API_KEY;
 
-  // Paso 1: Obtener todos los contact_ids únicos del archivo
+  // obtener todos contact_ids
   const contactIdToDeals = {};
   for (const deal of deals) {
     const contactId = deal.associations?.[0]?.to?.id;
@@ -20,7 +20,7 @@ export async function sendToHubspot(deals) {
   const allContactIds = Object.keys(contactIdToDeals);
   console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
-  // Paso 2: Verificar cuáles contactos existen por contact_id (idProperty)
+  //verificar contactos existen por contact_id
   const existingContactIds = new Set();
 
   for (let i = 0; i < allContactIds.length; i += BATCH_SIZE) {
@@ -58,7 +58,7 @@ export async function sendToHubspot(deals) {
 
   console.log(`✅ Contactos válidos encontrados: ${existingContactIds.size}`);
 
-  // Paso 3: Filtrar negocios que tienen contactos válidos
+  // filtrar negocios que tienen contactos válidos
   const validDeals = [];
   const invalids = [];
 
@@ -80,7 +80,7 @@ export async function sendToHubspot(deals) {
     });
   }
 
-  // Paso 4: Enviar negocios válidos a HubSpot por lotes
+  // enviar negocios validos
   let totalSubidos = 0;
 
   for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
