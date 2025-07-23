@@ -14,7 +14,7 @@ export async function sendToHubspot(deals) {
     
     console.log(`🔍 Validando contactos del batch ${Math.floor(i/batchSize) + 1}...`);
     
-    // Validar que todos los contactos existan antes de enviar el batch
+    // Validar que todos los contactos existan
     const validDeals = [];
     const invalidContactIds = [];
     
@@ -32,7 +32,6 @@ export async function sendToHubspot(deals) {
       }
     }
     
-    // Registrar negocios que no se subirán
     if (invalidContactIds.length > 0) {
       console.warn(`❌ ${invalidContactIds.length} negocio(s) NO se subirán por contactos inexistentes:`);
       invalidContactIds.forEach(item => {
@@ -41,7 +40,6 @@ export async function sendToHubspot(deals) {
       totalSkipped += invalidContactIds.length;
     }
     
-    // Solo enviar si hay negocios válidos
     if (validDeals.length === 0) {
       console.log(`⚠️ Batch ${Math.floor(i/batchSize) + 1}: Todos los contactos son inválidos, saltando batch completo`);
       continue;
@@ -68,7 +66,7 @@ export async function sendToHubspot(deals) {
   console.log(`📊 Resumen final: ${totalProcessed} negocios subidos ✅ | ${totalSkipped} negocios omitidos ❌`);
 }
 
-// Función para verificar si existe un contacto en HubSpot
+// verificar si existe un contacto en HubSpot
 async function checkContactExists(contactId) {
   const apiKey = process.env.HUBSPOT_API_KEY;
   const url = `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`;

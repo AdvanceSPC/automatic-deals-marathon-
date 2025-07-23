@@ -32,7 +32,7 @@ export default async function handler(req, res) {
   console.log("📃 Cargando historial...");
   const processed = await readProcessedList();
 
-  // 🔍 Listar todos los archivos en el bucket de lectura
+  // Listar todos los archivos en el bucket de lectura
   const command = new ListObjectsV2Command({
     Bucket: AWS1_BUCKET,
     Prefix: "delta_negocio_",
