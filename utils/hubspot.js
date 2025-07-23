@@ -11,27 +11,25 @@ export async function sendToHubspot(deals) {
 
   for (let i = 0; i < deals.length; i += batchSize) {
     const batch = deals.slice(i, i + batchSize);
-    
-    console.log(`🔍 Validando contactos del batch ${Math.floor(i/batchSize) + 1}...`);
-    
-    // Validar que todos los contactos existan
-    const validDeals = [];
-    const invalidContactIds = [];
-    
-    for (const deal of batch) {
-      const contactId = deal.associations[0].to.id;
-      const contactExists = await checkContactExists(contactId);
-      
-      if (contactExists) {
-        validDeals.push(deal);
-      } else {
-        invalidContactIds.push({
-          contactId: contactId,
-          dealName: deal.properties.dealname || 'Sin nombre'
-        });
-      }
-    }
-    
+    const batchIndex = Math.floor(i / batchSize) + 1;
+    console.log(`🔍 Validando contactos del batch ${batchIndex}...`);
+
+    const validationResults = await Promise.all(
+      batch.map(async (deal) => {
+        const contactId = deal.associations[0].to.id;
+        const contactExists = await checkContactExists(contactId);
+        return {
+          deal,
+          contactExists,
+          contactId,
+          dealName: deal.properties.dealname || 'Sin nombre',
+        };
+      })
+    );
+
+    const validDeals = validationResults.filter(r => r.contactExists).map(r => r.deal);
+    const invalidContactIds = validationResults.filter(r => !r.contactExists);
+
     if (invalidContactIds.length > 0) {
       console.warn(`❌ ${invalidContactIds.length} negocio(s) NO se subirán por contactos inexistentes:`);
       invalidContactIds.forEach(item => {
@@ -39,49 +37,57 @@ export async function sendToHubspot(deals) {
       });
       totalSkipped += invalidContactIds.length;
     }
-    
+
     if (validDeals.length === 0) {
-      console.log(`⚠️ Batch ${Math.floor(i/batchSize) + 1}: Todos los contactos son inválidos, saltando batch completo`);
+      console.log(`⚠️ Batch ${batchIndex}: Todos los contactos son inválidos, saltando batch completo`);
       continue;
     }
-    
-    // Enviar solo los negocios válidos
-    const res = await fetch(url, {
-      method: "POST",
-      headers: { 
-        "Content-Type": "application/json",
-        "Authorization": `Bearer ${apiKey}`
-      },
-      body: JSON.stringify({ inputs: validDeals }),
-    });
 
-    if (!res.ok) {
-      console.error(`❌ Error en batch ${Math.floor(i/batchSize) + 1}:`, await res.text());
-    } else {
-      totalProcessed += validDeals.length;
-      console.log(`✅ Batch ${Math.floor(i/batchSize) + 1} enviado exitosamente: ${validDeals.length}/${batch.length} negocios`);
+    try {
+      const res = await fetch(url, {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${apiKey}`
+        },
+        body: JSON.stringify({ inputs: validDeals }),
+      });
+
+      if (!res.ok) {
+        console.error(`❌ Error en batch ${batchIndex}:`, await res.text());
+      } else {
+        totalProcessed += validDeals.length;
+        console.log(`✅ Batch ${batchIndex} enviado exitosamente: ${validDeals.length}/${batch.length} negocios`);
+      }
+    } catch (err) {
+      console.error(`❌ Excepción en el envío del batch ${batchIndex}:`, err);
     }
   }
-  
+
   console.log(`📊 Resumen final: ${totalProcessed} negocios subidos ✅ | ${totalSkipped} negocios omitidos ❌`);
 }
 
-// verificar si existe un contacto en HubSpot
+// Verificar si existe un contacto en HubSpot
 async function checkContactExists(contactId) {
   const apiKey = process.env.HUBSPOT_API_KEY;
   const url = `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`;
-  
+
   try {
     const res = await fetch(url, {
       method: "GET",
-      headers: { 
+      headers: {
         "Authorization": `Bearer ${apiKey}`
       }
     });
-    
-    return res.ok;
+
+    if (res.status === 200) return true;
+    if (res.status === 404) return false;
+
+    const errorText = await res.text();
+    console.error(`❌ Error inesperado al verificar contacto ${contactId}: ${res.status} - ${errorText}`);
+    return false;
   } catch (error) {
-    console.error(`❌ Error verificando contacto ${contactId}:`, error);
+    console.error(`❌ Excepción al verificar contacto ${contactId}:`, error);
     return false;
   }
 }
