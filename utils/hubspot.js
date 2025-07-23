@@ -18,36 +18,28 @@ export async function sendToHubspot(deals) {
   }
 
   const allContactIds = Object.keys(contactIdToDeals);
-  console.log(
-    `🔍 Total contactos únicos referenciados: ${allContactIds.length}`
-  );
+  console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
   const contactIdToHubspotId = new Map();
 
   for (let i = 0; i < allContactIds.length; i += BATCH_SIZE) {
     const batch = allContactIds.slice(i, i + BATCH_SIZE);
     try {
-      const res = await fetch(
-        `${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({
-            idProperty: "contact_id",
-            inputs: batch.map((id) => ({ id })),
-          }),
-        }
-      );
+      const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+          idProperty: "contact_id",
+          inputs: batch.map(id => ({ id }))
+        }),
+      });
 
       if (!res.ok) {
         const error = await res.text();
-        console.error(
-          `❌ Error al consultar contactos batch ${i}-${i + batch.length - 1}:`,
-          error
-        );
+        console.error(`❌ Error al consultar contactos batch ${i}-${i + batch.length - 1}:`, error);
         continue;
       }
 
@@ -57,6 +49,7 @@ export async function sendToHubspot(deals) {
         const hubspotId = contact.id; 
         contactIdToHubspotId.set(customContactId, hubspotId);
       }
+
     } catch (err) {
       console.error(`❌ Excepción al consultar batch de contactos:`, err);
     }
@@ -64,15 +57,16 @@ export async function sendToHubspot(deals) {
     await wait(250);
   }
 
-  console.log(`✅ Contactos válidos encontrados: ${contactIdToHubspotId.size}`);
+  console.log(`✅ Contactos válidos encontrados: ${contactIdToHubspotId.size} de ${allContactIds.length}`);
 
+  // filtrar y actualizar deals con IDs de HubSpot
   const validDeals = [];
-  const invalids = [];
+  const invalidDeals = [];
 
   for (const contactId of Object.keys(contactIdToDeals)) {
     const negocios = contactIdToDeals[contactId];
     const hubspotId = contactIdToHubspotId.get(contactId);
-
+    
     if (hubspotId) {
       for (const negocio of negocios) {
         negocio.associations[0].to.id = hubspotId;
@@ -81,50 +75,57 @@ export async function sendToHubspot(deals) {
     } else {
       // Contacto no existe
       for (const negocio of negocios) {
-        invalids.push({
-          dealName: negocio.properties.dealname || "Sin nombre",
-          contactId,
+        invalidDeals.push({ 
+          dealName: negocio.properties.dealname || "Sin nombre", 
+          contactId 
         });
       }
     }
   }
 
-  if (invalids.length > 0) {
-    console.warn(
-      `⚠️ ${invalids.length} negocio(s) omitidos por contactos inexistentes:`
-    );
-    invalids.forEach(({ dealName, contactId }) => {
-      console.warn(
-        `   • Negocio: "${dealName}" - Contacto inexistente: ${contactId}`
-      );
-    });
+
+
+  if (invalidDeals.length > 0) {
+    console.log(`⚠️ NEGOCIOS QUE NO SE SUBIRÁN (${invalidDeals.length}):`);
+    const samplesToShow = Math.min(invalidDeals.length, 10);
+    for (let i = 0; i < samplesToShow; i++) {
+      const { dealName, contactId } = invalidDeals[i];
+      console.warn(`   • "${dealName}" - Contacto inexistente: ${contactId}`);
+    }
+    if (invalidDeals.length > 10) {
+      console.warn(`   ... y ${invalidDeals.length - 10} más`);
+    }
+    console.log(); 
   }
 
-  // Enviar negocios válidos
+  // enviar negocios válidos
   let totalSubidos = 0;
+  let totalFallidos = 0;
+
+  if (validDeals.length === 0) {
+    console.log("⚠️ No hay negocios válidos para subir.");
+  } else {
+    console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot...`);
+  }
 
   for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
     const batch = validDeals.slice(i, i + BATCH_SIZE);
 
     try {
-      const res = await fetch(
-        `${HUBSPOT_BASE}/crm/v3/objects/deals/batch/create`,
-        {
-          method: "POST",
-          headers: {
-            Authorization: `Bearer ${apiKey}`,
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ inputs: batch }),
-        }
-      );
+      const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/deals/batch/create`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ inputs: batch }),
+      });
 
       if (!res.ok) {
         const error = await res.text();
-        console.error(
-          `❌ Error al subir batch ${i}-${i + batch.length - 1}:`,
-          error
-        );
+        console.error(`❌ Error al subir batch ${i}-${i + batch.length - 1}:`, error);
+        totalFallidos += batch.length;
+        
         try {
           const errorData = JSON.parse(error);
           if (errorData.errors) {
@@ -143,20 +144,26 @@ export async function sendToHubspot(deals) {
         totalSubidos += batch.length;
       }
     } catch (err) {
-      console.error(
-        `❌ Excepción al subir batch ${i}-${i + batch.length - 1}:`,
-        err
-      );
+      console.error(`❌ Excepción al subir batch ${i}-${i + batch.length - 1}:`, err);
     }
 
     await wait(500);
   }
 
-  console.log(
-    `📊 Resumen: ${totalSubidos} negocios subidos ✅ | ${invalids.length} omitidos ❌`
-  );
+  const totalOriginal = deals.length;
+  const totalProcesadosConExito = totalSubidos;
+  const totalFallidosEnEnvio = totalFallidos;
+  const totalSinContacto = invalidDeals.length;
+  
+  console.log(`\n🎯 ================== RESUMEN FINAL ==================`);
+  console.log(`📄 Total negocios en archivo: ${totalOriginal}`);
+  console.log(`✅ Subidos exitosamente: ${totalProcesadosConExito}`);
+  console.log(`❌ Fallidos en envío: ${totalFallidosEnEnvio}`);
+  console.log(`🚫 Sin contacto válido: ${totalSinContacto}`);
+  console.log(`📊 Tasa de éxito: ${((totalProcesadosConExito / totalOriginal) * 100).toFixed(1)}%`);
+  console.log(`==================================================\n`);
 }
 
 function wait(ms) {
-  return new Promise((resolve) => setTimeout(resolve, ms));
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
