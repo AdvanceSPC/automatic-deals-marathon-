@@ -62,7 +62,7 @@ export async function fetchCSVFromS3(fileName) {
             genero_edad: row.genero_edad || null,
             agrupador_categoria: row.agrupador_categoria || null,
             actividad: row.actividad || null,
-            talla_codigo: row.talla__codigo_ || null,
+            talla__codigo_: row.talla__codigo_ || null,
             nombre_campana: row.nombre_campana || null,
             amount: row.amount || null,
             dealstage: row.dealstage || null,
