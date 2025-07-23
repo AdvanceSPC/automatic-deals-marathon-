@@ -1,93 +1,118 @@
 // ./utils/hubspot.js
 import fetch from "node-fetch";
 
+const HUBSPOT_BASE = "https://api.hubapi.com";
+const BATCH_SIZE = 100;
+
 export async function sendToHubspot(deals) {
   const apiKey = process.env.HUBSPOT_API_KEY;
-  const url = `https://api.hubapi.com/crm/v3/objects/deals/batch/create`;
-  const batchSize = 100;
 
-  let totalProcessed = 0;
-  let totalSkipped = 0;
-
-  for (let i = 0; i < deals.length; i += batchSize) {
-    const batch = deals.slice(i, i + batchSize);
-    const batchIndex = Math.floor(i / batchSize) + 1;
-    console.log(`🔍 Validando contactos del batch ${batchIndex}...`);
-
-    const validationResults = await Promise.all(
-      batch.map(async (deal) => {
-        const contactId = deal.associations[0].to.id;
-        const contactExists = await checkContactExists(contactId);
-        return {
-          deal,
-          contactExists,
-          contactId,
-          dealName: deal.properties.dealname || 'Sin nombre',
-        };
-      })
-    );
-
-    const validDeals = validationResults.filter(r => r.contactExists).map(r => r.deal);
-    const invalidContactIds = validationResults.filter(r => !r.contactExists);
-
-    if (invalidContactIds.length > 0) {
-      console.warn(`❌ ${invalidContactIds.length} negocio(s) NO se subirán por contactos inexistentes:`);
-      invalidContactIds.forEach(item => {
-        console.warn(`   • Negocio: "${item.dealName}" - Contacto inexistente: ${item.contactId}`);
-      });
-      totalSkipped += invalidContactIds.length;
+  // Paso 1: Obtener todos los contact_ids únicos del archivo
+  const contactIdToDeals = {};
+  for (const deal of deals) {
+    const contactId = deal.associations?.[0]?.to?.id;
+    if (contactId) {
+      if (!contactIdToDeals[contactId]) contactIdToDeals[contactId] = [];
+      contactIdToDeals[contactId].push(deal);
     }
+  }
 
-    if (validDeals.length === 0) {
-      console.log(`⚠️ Batch ${batchIndex}: Todos los contactos son inválidos, saltando batch completo`);
-      continue;
-    }
+  const allContactIds = Object.keys(contactIdToDeals);
+  console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
+  // Paso 2: Verificar cuáles contactos existen por contact_id (idProperty)
+  const existingContactIds = new Set();
+
+  for (let i = 0; i < allContactIds.length; i += BATCH_SIZE) {
+    const batch = allContactIds.slice(i, i + BATCH_SIZE);
     try {
-      const res = await fetch(url, {
+      const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
         method: "POST",
         headers: {
-          "Content-Type": "application/json",
-          "Authorization": `Bearer ${apiKey}`
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
         },
-        body: JSON.stringify({ inputs: validDeals }),
+        body: JSON.stringify({
+          idProperty: "contact_id",
+          inputs: batch.map(id => ({ id }))
+        }),
       });
 
       if (!res.ok) {
-        console.error(`❌ Error en batch ${batchIndex}:`, await res.text());
-      } else {
-        totalProcessed += validDeals.length;
-        console.log(`✅ Batch ${batchIndex} enviado exitosamente: ${validDeals.length}/${batch.length} negocios`);
+        const error = await res.text();
+        console.error(`❌ Error al consultar contactos batch ${i}-${i + batch.length - 1}:`, error);
+        continue;
       }
+
+      const data = await res.json();
+      for (const contact of data.results || []) {
+        existingContactIds.add(contact.properties.contact_id);
+      }
+
     } catch (err) {
-      console.error(`❌ Excepción en el envío del batch ${batchIndex}:`, err);
+      console.error(`❌ Excepción al consultar batch de contactos:`, err);
+    }
+
+    await wait(250);
+  }
+
+  console.log(`✅ Contactos válidos encontrados: ${existingContactIds.size}`);
+
+  // Paso 3: Filtrar negocios que tienen contactos válidos
+  const validDeals = [];
+  const invalids = [];
+
+  for (const contactId of Object.keys(contactIdToDeals)) {
+    const negocios = contactIdToDeals[contactId];
+    if (existingContactIds.has(contactId)) {
+      validDeals.push(...negocios);
+    } else {
+      for (const negocio of negocios) {
+        invalids.push({ dealName: negocio.properties.dealname || "Sin nombre", contactId });
+      }
     }
   }
 
-  console.log(`📊 Resumen final: ${totalProcessed} negocios subidos ✅ | ${totalSkipped} negocios omitidos ❌`);
+  if (invalids.length > 0) {
+    console.warn(`⚠️ ${invalids.length} negocio(s) omitidos por contactos inexistentes:`);
+    invalids.forEach(({ dealName, contactId }) => {
+      console.warn(`   • Negocio: "${dealName}" - Contacto inexistente: ${contactId}`);
+    });
+  }
+
+  // Paso 4: Enviar negocios válidos a HubSpot por lotes
+  let totalSubidos = 0;
+
+  for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
+    const batch = validDeals.slice(i, i + BATCH_SIZE);
+
+    try {
+      const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/deals/batch/create`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`,
+          "Content-Type": "application/json"
+        },
+        body: JSON.stringify({ inputs: batch }),
+      });
+
+      if (!res.ok) {
+        const error = await res.text();
+        console.error(`❌ Error al subir batch ${i}-${i + batch.length - 1}:`, error);
+      } else {
+        console.log(`✅ Subido batch ${i}-${i + batch.length - 1}`);
+        totalSubidos += batch.length;
+      }
+    } catch (err) {
+      console.error(`❌ Excepción al subir batch ${i}-${i + batch.length - 1}:`, err);
+    }
+
+    await wait(500);
+  }
+
+  console.log(`📊 Resumen: ${totalSubidos} negocios subidos ✅ | ${invalids.length} omitidos ❌`);
 }
 
-// Verificar si existe un contacto en HubSpot
-async function checkContactExists(contactId) {
-  const apiKey = process.env.HUBSPOT_API_KEY;
-  const url = `https://api.hubapi.com/crm/v3/objects/contacts/${contactId}`;
-
-  try {
-    const res = await fetch(url, {
-      method: "GET",
-      headers: {
-        "Authorization": `Bearer ${apiKey}`
-      }
-    });
-
-    if (res.status === 200) return true;
-    if (res.status === 404) return false;
-
-    const errorText = await res.text();
-    console.error(`❌ Error inesperado al verificar contacto ${contactId}: ${res.status} - ${errorText}`);
-    return false;
-  } catch (error) {
-    console.error(`❌ Excepción al verificar contacto ${contactId}:`, error);
-    return false;
-  }
+function wait(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
