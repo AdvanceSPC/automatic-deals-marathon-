@@ -132,25 +132,6 @@ export async function saveReportToS3(content, fileName) {
   console.log(`📝 Reporte guardado como: reportes/${fileName}`);
 }
 
-import { saveReportToS3 } from "./s3Helpers.js"; 
-
-const now = new Date();
-const reportString = `
-📄 Procesado archivo: ${process.env.CURRENT_FILENAME || "Desconocido"}
-
-📊 Total negocios en archivo: ${totalOriginal}
-✅ Subidos exitosamente: ${totalProcesadosConExito}
-❌ Fallidos en envío: ${totalFallidosEnEnvio}
-🚫 Sin contacto válido: ${totalSinContacto}
-
-📈 Tasa de éxito: ${((totalProcesadosConExito / totalOriginal) * 100).toFixed(1)}%
-
-🕒 Fecha de ejecución: ${now.toLocaleDateString("es-EC")} ${now.toLocaleTimeString("es-EC")}
-`.trim();
-
-const baseFileName = (process.env.CURRENT_FILENAME || `archivo_${now.getTime()}`).replace(".csv", "");
-await saveReportToS3(reportString, `reporte_${baseFileName}.txt`);
-
 for (const fileName of nuevosArchivos) {
   try {
     process.env.CURRENT_FILENAME = fileName;
