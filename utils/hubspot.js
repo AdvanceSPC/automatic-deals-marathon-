@@ -1,4 +1,3 @@
-// ./utils/hubspot.js
 import fetch from "node-fetch";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
@@ -61,7 +60,6 @@ export async function sendToHubspot(deals) {
   const errorSummary = {
     sin_contacto: 0,
     sin_nombre: 0,
-    otros: 0,
   };
 
   for (const contactId of Object.keys(contactIdToDeals)) {
@@ -81,7 +79,11 @@ export async function sendToHubspot(deals) {
     } else {
       errorSummary.sin_contacto += negocios.length;
       for (const negocio of negocios) {
-        invalidDeals.push({ reason: "Contacto inexistente", dealName: negocio.properties.dealname || "Sin nombre", contactId });
+        invalidDeals.push({
+          reason: "Contacto inexistente",
+          dealName: negocio.properties.dealname || "Sin nombre",
+          contactId,
+        });
       }
     }
   }
@@ -120,7 +122,7 @@ export async function sendToHubspot(deals) {
   const totalSinNombre = errorSummary.sin_nombre;
   const totalProcesadosConExito = totalSubidos;
   const totalFallidosEnEnvio = totalFallidos;
-  const tasaExito = ((totalSubidos / totalOriginal) * 100).toFixed(1);
+  const tasaExito = ((totalSubidos / totalOriginal) * 100).toFixed(2);
 
   return {
     totalOriginal,

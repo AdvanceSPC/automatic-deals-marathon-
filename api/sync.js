@@ -1,4 +1,3 @@
-// ./api/sync.js
 import {
   fetchCSVFromS3,
   readProcessedList,
@@ -65,8 +64,11 @@ export default async function handler(req, res) {
       console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
       const resultado = await sendToHubspot(deals);
 
-      resumen = `
-📄 Procesado archivo: ${fileName}
+      const now = new Date();
+      const fecha = now.toLocaleString("es-ES", { timeZone: "America/Guayaquil" });
+
+      resumen =
+`📄 Procesado archivo: ${fileName}
 
 📊 Total negocios en archivo: ${resultado.totalOriginal}
 ✅ Subidos exitosamente: ${resultado.totalProcesadosConExito}
@@ -76,14 +78,13 @@ export default async function handler(req, res) {
 
 📈 Tasa de éxito: ${resultado.tasaExito}%
 
-🕒 Fecha de ejecución: ${new Date().toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}
+🕒 Fecha de ejecución: ${fecha}
 `;
 
+      console.log(resumen.trim());
       processed.push(fileName);
-      console.log(`✅ Procesado exitosamente: ${fileName}`);
     } catch (error) {
-      resumen = `❌ Error procesando ${fileName}:
-${error.message}`;
+      resumen = `❌ Error procesando ${fileName}:\n${error.message}`;
       console.error(resumen);
     }
 
