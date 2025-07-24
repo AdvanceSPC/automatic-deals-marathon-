@@ -121,6 +121,25 @@ export async function saveProcessedList(list) {
   await s3Hist.send(command);
 }
 
+// Guardar reporte de ejecución
+export async function saveExecutionReport(fileName, reportText) {
+  const now = new Date();
+  const timestamp = now.toISOString().replace(/[:\-T]/g, '').slice(0, 12); // YYYYMMDDHHmm
+  const baseName = fileName.replace('.csv', '');
+
+  const reportKey = `reportes/${baseName}_${timestamp}_reporte.txt`;
+
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS2_BUCKET,
+    Key: reportKey,
+    Body: reportText,
+    ContentType: "text/plain",
+  });
+
+  await s3Hist.send(command);
+  console.log(`📄 Reporte guardado en S3: ${reportKey}`);
+}
+
 // Verificar conexión a los buckets S3
 export async function testS3Connections() {
   try {
@@ -132,7 +151,6 @@ export async function testS3Connections() {
     );
     console.log("✅ Conexión exitosa a bucket de lectura (AWS1)");
 
-    // Probar conexión al bucket de historial
     await s3Hist.send(
       new ListObjectsV2Command({
         Bucket: process.env.AWS2_BUCKET,
