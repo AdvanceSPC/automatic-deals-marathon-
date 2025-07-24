@@ -1,9 +1,9 @@
-// ./api/sync.js
 import {
   fetchCSVFromS3,
   readProcessedList,
   saveProcessedList,
   testS3Connections,
+  saveExecutionReport,
 } from "../utils/s3Helpers.js";
 import { sendToHubspot } from "../utils/hubspot.js";
 import { ListObjectsV2Command } from "@aws-sdk/client-s3";
@@ -32,7 +32,6 @@ export default async function handler(req, res) {
   console.log("📃 Cargando historial...");
   const processed = await readProcessedList();
 
-  // Listar todos los archivos en el bucket de lectura
   const command = new ListObjectsV2Command({
     Bucket: AWS1_BUCKET,
     Prefix: "delta_negocio_",
@@ -55,17 +54,34 @@ export default async function handler(req, res) {
       const deals = await fetchCSVFromS3(fileName);
 
       if (!deals.length) {
-        console.warn(`⚠️ Archivo vacío: ${fileName}`);
+        const mensaje = `⚠️ Archivo vacío: ${fileName}`;
+        console.warn(mensaje);
+        await saveExecutionReport(fileName, mensaje);
         continue;
       }
 
       console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
-      await sendToHubspot(deals);
+      const resultado = await sendToHubspot(deals);
 
+      const resumen = `
+📄 Procesado archivo: ${fileName}
+
+📊 Total negocios en archivo: ${resultado.totalOriginal}
+✅ Subidos exitosamente: ${resultado.totalSubidos}
+❌ Fallidos en envío: ${resultado.totalFallidos}
+🚫 Sin contacto válido: ${resultado.totalSinContacto}
+
+📈 Tasa de éxito: ${resultado.tasaExito}%
+
+🕒 Fecha de ejecución: ${new Date().toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}
+`;
+
+      await saveExecutionReport(fileName, resumen);
       processed.push(fileName);
       console.log(`✅ Procesado exitosamente: ${fileName}`);
     } catch (error) {
       console.error(`❌ Error procesando ${fileName}:`, error);
+      await saveExecutionReport(fileName, `❌ Error procesando ${fileName}:\n${error.message}`);
     }
   }
 
