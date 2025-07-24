@@ -1,3 +1,4 @@
+// ./api/sync.js
 import {
   fetchCSVFromS3,
   readProcessedList,
@@ -49,6 +50,7 @@ export default async function handler(req, res) {
   }
 
   for (const fileName of nuevosArchivos) {
+    let resumen = "";
     try {
       console.log(`⬇️ Procesando archivo: ${fileName}`);
       const deals = await fetchCSVFromS3(fileName);
@@ -63,26 +65,29 @@ export default async function handler(req, res) {
       console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
       const resultado = await sendToHubspot(deals);
 
-      const resumen = `
+      resumen = `
 📄 Procesado archivo: ${fileName}
 
 📊 Total negocios en archivo: ${resultado.totalOriginal}
-✅ Subidos exitosamente: ${resultado.totalSubidos}
-❌ Fallidos en envío: ${resultado.totalFallidos}
+✅ Subidos exitosamente: ${resultado.totalProcesadosConExito}
+❌ Fallidos en envío: ${resultado.totalFallidosEnEnvio}
 🚫 Sin contacto válido: ${resultado.totalSinContacto}
+🚫 Sin nombre: ${resultado.totalSinNombre}
 
 📈 Tasa de éxito: ${resultado.tasaExito}%
 
 🕒 Fecha de ejecución: ${new Date().toLocaleString("es-ES", { timeZone: "Europe/Madrid" })}
 `;
 
-      await saveExecutionReport(fileName, resumen);
       processed.push(fileName);
       console.log(`✅ Procesado exitosamente: ${fileName}`);
     } catch (error) {
-      console.error(`❌ Error procesando ${fileName}:`, error);
-      await saveExecutionReport(fileName, `❌ Error procesando ${fileName}:\n${error.message}`);
+      resumen = `❌ Error procesando ${fileName}:
+${error.message}`;
+      console.error(resumen);
     }
+
+    await saveExecutionReport(fileName, resumen);
   }
 
   console.log("💾 Actualizando historial...");
