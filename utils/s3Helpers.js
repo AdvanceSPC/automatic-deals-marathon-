@@ -1,4 +1,4 @@
-// ./utils/s3Helpers.js
+// utils/s3Helpers.js
 import {
   S3Client,
   GetObjectCommand,
@@ -26,7 +26,6 @@ const s3Hist = new S3Client({
   },
 });
 
-// Leer CSV del bucket de datos
 export async function fetchCSVFromS3(fileName) {
   const command = new GetObjectCommand({
     Bucket: process.env.AWS1_BUCKET,
@@ -41,12 +40,8 @@ export async function fetchCSVFromS3(fileName) {
     stream
       .pipe(csv({ separator: ";" }))
       .on("data", (row) => {
-        if (!row.contact_id) {
-          console.warn(`⚠️ Negocio sin contact_id: ${row.linea || 'Sin nombre'} - No se subirá porque no existe contacto para asociar`);
-          return;
-        }
-
-        const deal = {
+        if (!row.contact_id) return;
+        deals.push({
           properties: {
             dealname: row.linea || null,
             concepto: row.concepto || null,
@@ -73,18 +68,16 @@ export async function fetchCSVFromS3(fileName) {
               types: [
                 {
                   associationCategory: "HUBSPOT_DEFINED",
-                  associationTypeId: 3 
-                }
+                  associationTypeId: 3,
+                },
               ],
               to: {
                 id: row.contact_id,
-                type: "contact"
-              }
-            }
-          ]
-        };
-
-        deals.push(deal);
+                type: "contact",
+              },
+            },
+          ],
+        });
       })
       .on("end", resolve)
       .on("error", reject);
@@ -93,14 +86,12 @@ export async function fetchCSVFromS3(fileName) {
   return deals;
 }
 
-// Leer historial de archivos procesados
 export async function readProcessedList() {
   try {
     const command = new GetObjectCommand({
       Bucket: process.env.AWS2_BUCKET,
       Key: process.env.PROCESSED_KEY,
     });
-
     const response = await s3Hist.send(command);
     const stream = await response.Body.transformToString();
     return JSON.parse(stream);
@@ -109,7 +100,6 @@ export async function readProcessedList() {
   }
 }
 
-// Guardar historial actualizado
 export async function saveProcessedList(list) {
   const command = new PutObjectCommand({
     Bucket: process.env.AWS2_BUCKET,
@@ -117,51 +107,67 @@ export async function saveProcessedList(list) {
     Body: JSON.stringify(list, null, 2),
     ContentType: "application/json",
   });
-
   await s3Hist.send(command);
 }
 
-// Guardar reporte de ejecución
-export async function saveExecutionReport(fileName, reportText) {
-  const now = new Date();
-  const timestamp = now.toISOString().replace(/[:\-T]/g, '').slice(0, 12); // YYYYMMDDHHmm
-  const baseName = fileName.replace('.csv', '');
-
-  const reportKey = `reportes/${baseName}_${timestamp}_reporte.txt`;
-
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS2_BUCKET,
-    Key: reportKey,
-    Body: reportText,
-    ContentType: "text/plain",
-  });
-
-  await s3Hist.send(command);
-  console.log(`📄 Reporte guardado en S3: ${reportKey}`);
-}
-
-// Verificar conexión a los buckets S3
 export async function testS3Connections() {
   try {
-    await s3Read.send(
-      new ListObjectsV2Command({
-        Bucket: process.env.AWS1_BUCKET,
-        MaxKeys: 1,
-      })
-    );
-    console.log("✅ Conexión exitosa a bucket de lectura (AWS1)");
-
-    await s3Hist.send(
-      new ListObjectsV2Command({
-        Bucket: process.env.AWS2_BUCKET,
-        MaxKeys: 1,
-      })
-    );
-    console.log("✅ Conexión exitosa a bucket de historial (AWS2)");
-
+    await s3Read.send(new ListObjectsV2Command({ Bucket: process.env.AWS1_BUCKET, MaxKeys: 1 }));
+    await s3Hist.send(new ListObjectsV2Command({ Bucket: process.env.AWS2_BUCKET, MaxKeys: 1 }));
     return true;
   } catch (err) {
     console.error("❌ Fallo en conexión a uno o ambos buckets S3:", err);
     return false;
+  }
+}
+
+export async function saveReportToS3(content, fileName) {
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS2_BUCKET,
+    Key: `reportes/${fileName}`,
+    Body: content,
+    ContentType: "text/plain",
+  });
+  await s3Hist.send(command);
+  console.log(`📝 Reporte guardado como: reportes/${fileName}`);
+}  
+
+import { saveReportToS3 } from "./s3Helpers.js"; 
+
+const now = new Date();
+const reportString = `
+📄 Procesado archivo: ${process.env.CURRENT_FILENAME || "Desconocido"}
+
+📊 Total negocios en archivo: ${totalOriginal}
+✅ Subidos exitosamente: ${totalProcesadosConExito}
+❌ Fallidos en envío: ${totalFallidosEnEnvio}
+🚫 Sin contacto válido: ${totalSinContacto}
+
+📈 Tasa de éxito: ${((totalProcesadosConExito / totalOriginal) * 100).toFixed(1)}%
+
+🕒 Fecha de ejecución: ${now.toLocaleDateString("es-EC")} ${now.toLocaleTimeString("es-EC")}
+`.trim();
+
+const baseFileName = (process.env.CURRENT_FILENAME || `archivo_${now.getTime()}`).replace(".csv", "");
+await saveReportToS3(reportString, `reporte_${baseFileName}.txt`);
+
+for (const fileName of nuevosArchivos) {
+  try {
+    process.env.CURRENT_FILENAME = fileName;
+    console.log(`⬇️ Procesando archivo: ${fileName}`);
+    const deals = await fetchCSVFromS3(fileName);
+
+    if (!deals.length) {
+      console.warn(`⚠️ Archivo vacío: ${fileName}`);
+      continue;
+    }
+
+    console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
+    await sendToHubspot(deals);
+
+    processed.push(fileName);
+    console.log(`✅ Procesado exitosamente: ${fileName}`);
+  } catch (error) {
+    console.error(`❌ Error procesando ${fileName}:`, error);
   }
 }

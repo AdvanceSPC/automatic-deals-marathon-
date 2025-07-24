@@ -1,15 +1,15 @@
+// api/sync.js
 import {
   fetchCSVFromS3,
   readProcessedList,
   saveProcessedList,
   testS3Connections,
-  saveExecutionReport,
 } from "../utils/s3Helpers.js";
 import { sendToHubspot } from "../utils/hubspot.js";
-import { ListObjectsV2Command } from "@aws-sdk/client-s3";
+import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
 
 const AWS1_BUCKET = process.env.AWS1_BUCKET;
-const s3Read = new (await import("@aws-sdk/client-s3")).S3Client({
+const s3Read = new S3Client({
   region: process.env.AWS1_REGION,
   credentials: {
     accessKeyId: process.env.AWS1_ACCESS_KEY_ID,
@@ -38,7 +38,6 @@ export default async function handler(req, res) {
   });
 
   const { Contents = [] } = await s3Read.send(command);
-
   const nuevosArchivos = Contents.map((obj) => obj.Key)
     .filter((key) => key.endsWith(".csv"))
     .filter((key) => !processed.includes(key));
@@ -49,46 +48,24 @@ export default async function handler(req, res) {
   }
 
   for (const fileName of nuevosArchivos) {
-    let resumen = "";
     try {
+      process.env.CURRENT_FILENAME = fileName;
       console.log(`⬇️ Procesando archivo: ${fileName}`);
       const deals = await fetchCSVFromS3(fileName);
 
       if (!deals.length) {
-        const mensaje = `⚠️ Archivo vacío: ${fileName}`;
-        console.warn(mensaje);
-        await saveExecutionReport(fileName, mensaje);
+        console.warn(`⚠️ Archivo vacío: ${fileName}`);
         continue;
       }
 
       console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
-      const resultado = await sendToHubspot(deals);
+      await sendToHubspot(deals);
 
-      const now = new Date();
-      const fecha = now.toLocaleString("es-ES", { timeZone: "America/Guayaquil" });
-
-      resumen =
-`📄 Procesado archivo: ${fileName}
-
-📊 Total negocios en archivo: ${resultado.totalOriginal}
-✅ Subidos exitosamente: ${resultado.totalProcesadosConExito}
-❌ Fallidos en envío: ${resultado.totalFallidosEnEnvio}
-🚫 Sin contacto válido: ${resultado.totalSinContacto}
-🚫 Sin nombre: ${resultado.totalSinNombre}
-
-📈 Tasa de éxito: ${resultado.tasaExito}%
-
-🕒 Fecha de ejecución: ${fecha}
-`;
-
-      console.log(resumen.trim());
       processed.push(fileName);
+      console.log(`✅ Procesado exitosamente: ${fileName}`);
     } catch (error) {
-      resumen = `❌ Error procesando ${fileName}:\n${error.message}`;
-      console.error(resumen);
+      console.error(`❌ Error procesando ${fileName}:`, error);
     }
-
-    await saveExecutionReport(fileName, resumen);
   }
 
   console.log("💾 Actualizando historial...");

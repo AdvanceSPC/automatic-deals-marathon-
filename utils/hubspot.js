@@ -1,12 +1,14 @@
+// utils/hubspot.js
 import fetch from "node-fetch";
+import { saveReportToS3 } from "./s3Helpers.js";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const BATCH_SIZE = 100;
 
 export async function sendToHubspot(deals) {
   const apiKey = process.env.HUBSPOT_API_KEY;
-
   const contactIdToDeals = {};
+
   for (const deal of deals) {
     const contactId = deal.associations?.[0]?.to?.id;
     if (contactId) {
@@ -50,6 +52,7 @@ export async function sendToHubspot(deals) {
     } catch (err) {
       console.error(`❌ Excepción al consultar batch de contactos:`, err);
     }
+
     await wait(250);
   }
 
@@ -57,10 +60,6 @@ export async function sendToHubspot(deals) {
 
   const validDeals = [];
   const invalidDeals = [];
-  const errorSummary = {
-    sin_contacto: 0,
-    sin_nombre: 0,
-  };
 
   for (const contactId of Object.keys(contactIdToDeals)) {
     const negocios = contactIdToDeals[contactId];
@@ -68,19 +67,12 @@ export async function sendToHubspot(deals) {
 
     if (hubspotId) {
       for (const negocio of negocios) {
-        if (!negocio.properties.dealname) {
-          errorSummary.sin_nombre++;
-          invalidDeals.push({ reason: "Sin nombre", dealName: "(Vacío)", contactId });
-        } else {
-          negocio.associations[0].to.id = hubspotId;
-          validDeals.push(negocio);
-        }
+        negocio.associations[0].to.id = hubspotId;
+        validDeals.push(negocio);
       }
     } else {
-      errorSummary.sin_contacto += negocios.length;
       for (const negocio of negocios) {
         invalidDeals.push({
-          reason: "Contacto inexistente",
           dealName: negocio.properties.dealname || "Sin nombre",
           contactId,
         });
@@ -88,8 +80,27 @@ export async function sendToHubspot(deals) {
     }
   }
 
+  if (invalidDeals.length > 0) {
+    console.log(`⚠️ NEGOCIOS QUE NO SE SUBIRÁN (${invalidDeals.length}):`);
+    const samplesToShow = Math.min(invalidDeals.length, 10);
+    for (let i = 0; i < samplesToShow; i++) {
+      const { dealName, contactId } = invalidDeals[i];
+      console.warn(`   • "${dealName}" - Contacto inexistente: ${contactId}`);
+    }
+    if (invalidDeals.length > 10) {
+      console.warn(`   ... y ${invalidDeals.length - 10} más`);
+    }
+    console.log();
+  }
+
   let totalSubidos = 0;
   let totalFallidos = 0;
+
+  if (validDeals.length === 0) {
+    console.log("⚠️ No hay negocios válidos para subir.");
+  } else {
+    console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot...`);
+  }
 
   for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
     const batch = validDeals.slice(i, i + BATCH_SIZE);
@@ -108,30 +119,47 @@ export async function sendToHubspot(deals) {
         const error = await res.text();
         console.error(`❌ Error al subir batch ${i}-${i + batch.length - 1}:`, error);
         totalFallidos += batch.length;
-      } else {
-        totalSubidos += batch.length;
+        continue;
       }
+
+      console.log(`✅ Subido batch ${i}-${i + batch.length - 1}`);
+      totalSubidos += batch.length;
     } catch (err) {
       console.error(`❌ Excepción al subir batch ${i}-${i + batch.length - 1}:`, err);
     }
+
     await wait(500);
   }
 
   const totalOriginal = deals.length;
-  const totalSinContacto = errorSummary.sin_contacto;
-  const totalSinNombre = errorSummary.sin_nombre;
   const totalProcesadosConExito = totalSubidos;
   const totalFallidosEnEnvio = totalFallidos;
-  const tasaExito = ((totalSubidos / totalOriginal) * 100).toFixed(2);
+  const totalSinContacto = invalidDeals.length;
 
-  return {
-    totalOriginal,
-    totalProcesadosConExito,
-    totalFallidosEnEnvio,
-    totalSinContacto,
-    totalSinNombre,
-    tasaExito,
-  };
+  console.log(`\n🎯 ================== RESUMEN FINAL ==================`);
+  console.log(`📄 Total negocios en archivo: ${totalOriginal}`);
+  console.log(`✅ Subidos exitosamente: ${totalProcesadosConExito}`);
+  console.log(`❌ Fallidos en envío: ${totalFallidosEnEnvio}`);
+  console.log(`🚫 Sin contacto válido: ${totalSinContacto}`);
+  console.log(`📊 Tasa de éxito: ${((totalProcesadosConExito / totalOriginal) * 100).toFixed(1)}%`);
+  console.log(`==================================================\n`);
+
+  const now = new Date();
+  const reportString = `
+📄 Procesado archivo: ${process.env.CURRENT_FILENAME || "Desconocido"}
+
+📊 Total negocios en archivo: ${totalOriginal}
+✅ Subidos exitosamente: ${totalProcesadosConExito}
+❌ Fallidos en envío: ${totalFallidosEnEnvio}
+🚫 Sin contacto válido: ${totalSinContacto}
+
+📈 Tasa de éxito: ${((totalProcesadosConExito / totalOriginal) * 100).toFixed(1)}%
+
+🕒 Fecha de ejecución: ${now.toLocaleDateString("es-EC")} ${now.toLocaleTimeString("es-EC")}
+`.trim();
+
+  const baseFileName = (process.env.CURRENT_FILENAME || `archivo_${now.getTime()}`).replace(".csv", "");
+  await saveReportToS3(reportString, `reporte_${baseFileName}.txt`);
 }
 
 function wait(ms) {
