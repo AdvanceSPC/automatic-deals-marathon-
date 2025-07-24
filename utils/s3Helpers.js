@@ -112,8 +112,10 @@ export async function saveProcessedList(list) {
 
 export async function testS3Connections() {
   try {
-    await s3Read.send(new ListObjectsV2Command({ Bucket: process.env.AWS1_BUCKET, MaxKeys: 1 }));
-    await s3Hist.send(new ListObjectsV2Command({ Bucket: process.env.AWS2_BUCKET, MaxKeys: 1 }));
+    await Promise.all([
+      s3Read.send(new ListObjectsV2Command({ Bucket: process.env.AWS1_BUCKET, MaxKeys: 1 })),
+      s3Hist.send(new ListObjectsV2Command({ Bucket: process.env.AWS2_BUCKET, MaxKeys: 1 }))
+    ]);
     return true;
   } catch (err) {
     console.error("❌ Fallo en conexión a uno o ambos buckets S3:", err);
@@ -130,4 +132,25 @@ export async function saveReportToS3(content, fileName) {
   });
   await s3Hist.send(command);
   console.log(`📝 Reporte guardado como: reportes/${fileName}`);
+}
+
+// Nueva función para guardar progreso parcial
+export async function savePartialProgress(fileName, processedCount, totalCount) {
+  const progressKey = `progress/${fileName.replace('.csv', '')}_progress.json`;
+  const progressData = {
+    fileName,
+    processedCount,
+    totalCount,
+    timestamp: new Date().toISOString(),
+    status: processedCount >= totalCount ? 'completed' : 'processing'
+  };
+  
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS2_BUCKET,
+    Key: progressKey,
+    Body: JSON.stringify(progressData, null, 2),
+    ContentType: "application/json",
+  });
+  
+  await s3Hist.send(command);
 }
