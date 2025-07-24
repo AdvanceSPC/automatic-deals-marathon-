@@ -22,12 +22,12 @@ const s3Read = new S3Client({
 
 export const config = {
   runtime: "nodejs",
-  maxDuration: 300, 
+  maxDuration: 300, // Explícitamente configurar timeout de Vercel
 };
 
 export default async function handler(req, res) {
   const executionStart = Date.now();
-  const MAX_EXECUTION_TIME = 280000;
+  const MAX_EXECUTION_TIME = 280000; // 280 segundos (20s de margen)
   
   console.log("🔌 Verificando conexión con buckets S3...");
 
@@ -39,6 +39,7 @@ export default async function handler(req, res) {
   console.log("📃 Cargando historial...");
   const processed = await readProcessedList();
   
+  // Verificar archivos parciales pendientes
   console.log("🔄 Verificando archivos parciales pendientes...");
   const partialFiles = await getPartialFiles();
 
@@ -51,8 +52,9 @@ export default async function handler(req, res) {
   const nuevosArchivos = Contents.map((obj) => obj.Key)
     .filter((key) => key.endsWith(".csv"))
     .filter((key) => !processed.includes(key))
-    .sort(); 
+    .sort(); // Procesar archivos en orden cronológico
 
+  // Crear lista combinada: primero archivos parciales, luego nuevos
   const archivosParaProcesar = [];
   
   // Agregar archivos parciales pendientes
@@ -85,10 +87,12 @@ export default async function handler(req, res) {
   let archivosParciales = 0;
   const resultados = [];
 
+  // Procesar archivos con control de tiempo inteligente
   for (const archivoInfo of archivosParaProcesar) {
     const tiempoRestante = MAX_EXECUTION_TIME - (Date.now() - executionStart);
     const { fileName, type, startIndex, totalRecords } = archivoInfo;
     
+    // Si queda menos de 60 segundos, detener el procesamiento
     if (tiempoRestante < 60000) {
       console.log(`⏰ Tiempo insuficiente (${Math.round(tiempoRestante/1000)}s) para procesar más archivos`);
       break;
@@ -112,17 +116,22 @@ export default async function handler(req, res) {
         continue;
       }
 
+      // Para archivos parciales, tomar solo la parte no procesada
       const dealsToProcess = type === 'partial' ? deals.slice(startIndex) : deals;
-      console.log(`📨 Enviando ${dealsToProcess.length} negocios a HubSpot...`);
-      const tiempoEstimadoPorRegistro = 0.03;
-      const tiempoEstimado = dealsToProcess.length * tiempoEstimadoPorRegistro * 1000;
-      const tiempoDisponibleParaArchivo = tiempoRestante - 30000; 
       
-      if (tiempoEstimado > tiempoDisponibleParaArchivo && dealsToProcess.length > 1000) {
+      console.log(`📨 Enviando ${dealsToProcess.length} negocios a HubSpot...`);
+      
+      // Estrategia basada en tamaño del archivo y tiempo disponible
+      const tiempoEstimadoPorRegistro = 0.02; // 20ms por registro (más optimista)
+      const tiempoEstimado = dealsToProcess.length * tiempoEstimadoPorRegistro * 1000;
+      const tiempoDisponibleParaArchivo = tiempoRestante - 30000; // Reservar 30s para cleanup
+      
+      if (tiempoEstimado > tiempoDisponibleParaArchivo && dealsToProcess.length > 1500) { // Umbral más alto
+        // Archivo grande - procesamiento parcial inteligente
         console.log(`📏 Archivo grande: ${dealsToProcess.length} registros pendientes, tiempo estimado: ${Math.round(tiempoEstimado/1000)}s`);
         
         const registrosPorSegundo = 1000 / (tiempoEstimadoPorRegistro * 1000);
-        const registrosAProcesar = Math.floor((tiempoDisponibleParaArchivo / 1000) * registrosPorSegundo * 0.8); // Factor de seguridad
+        const registrosAProcesar = Math.floor((tiempoDisponibleParaArchivo / 1000) * registrosPorSegundo * 0.9); // Factor de seguridad más agresivo
         
         console.log(`🎯 Procesando ${registrosAProcesar} de ${dealsToProcess.length} registros restantes`);
         
@@ -142,10 +151,14 @@ export default async function handler(req, res) {
         });
         
       } else {
+        // Procesar archivo completo o resto del archivo
         const resultado = await sendToHubspot(dealsToProcess, fileName);
+        
+        // Si era parcial, eliminarlo de parciales y marcarlo como completado
         if (type === 'partial') {
           await removePartialFile(fileName);
         }
+        
         processed.push(fileName);
         archivosCompletados++;
         
@@ -169,6 +182,7 @@ export default async function handler(req, res) {
       });
     }
 
+    // Verificar tiempo después de cada archivo
     const tiempoTranscurrido = Date.now() - executionStart;
     if (tiempoTranscurrido > MAX_EXECUTION_TIME * 0.9) {
       console.log(`⏰ Alcanzado 90% del tiempo límite (${Math.round(tiempoTranscurrido/1000)}s)`);
@@ -179,8 +193,10 @@ export default async function handler(req, res) {
   console.log("💾 Actualizando historial...");
   await saveProcessedList(processed);
 
+  // Verificar archivos parciales restantes
   const partialFilesRestantes = await getPartialFiles();
 
+  // Generar resumen detallado
   const executionTime = ((Date.now() - executionStart) / 1000).toFixed(2);
   const totalSubidos = resultados.reduce((sum, r) => sum + (r.subidos || 0), 0);
   

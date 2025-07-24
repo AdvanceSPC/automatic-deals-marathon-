@@ -1,16 +1,15 @@
-
 // utils/hubspot.js
 import fetch from "node-fetch";
 import { saveReportToS3, savePartialProgress } from "./s3Helpers.js";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const BATCH_SIZE = 100;
-const MAX_CONCURRENT_REQUESTS = 3; 
-const CONTACT_BATCH_SIZE = 100;
+const MAX_CONCURRENT_REQUESTS = 5; // Aumentar concurrencia
+const CONTACT_BATCH_SIZE = 300; // Aumentar batch size para contactos
 
 export async function sendToHubspot(deals, fileName) {
   const startTime = Date.now();
-  const MAX_EXECUTION_TIME = 250000;
+  const MAX_EXECUTION_TIME = 250000; // 250 segundos (50s de margen)
   
   const apiKey = process.env.HUBSPOT_API_KEY;
   const contactIdToDeals = {};
@@ -57,60 +56,89 @@ export async function sendToHubspot(deals, fileName) {
   return result;
 }
 
-async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
+async function validateContactsInParallel(contactIds, apiKey, maxTime) {
   const contactIdToHubspotId = new Map();
   const chunks = [];
+  const startTime = Date.now();
   
-  for (let i = 0; i < contactIds.length; i += CONTACT_BATCH_SIZE) {
-    chunks.push(contactIds.slice(i, i + CONTACT_BATCH_SIZE));
+  // Dividir en chunks más grandes para reducir requests
+  const OPTIMIZED_BATCH_SIZE = 300; // Aumentar batch size
+  for (let i = 0; i < contactIds.length; i += OPTIMIZED_BATCH_SIZE) {
+    chunks.push(contactIds.slice(i, i + OPTIMIZED_BATCH_SIZE));
   }
 
-  for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_REQUESTS) {
-    if (Date.now() > remainingTime) {
-      console.log("⏰ Timeout alcanzado durante validación de contactos");
+  console.log(`🔍 Validando ${contactIds.length} contactos en ${chunks.length} chunks de ${OPTIMIZED_BATCH_SIZE}`);
+
+  // Procesar chunks con mayor concurrencia pero con límite de tiempo estricto
+  const MAX_CONCURRENT = 5; // Aumentar concurrencia
+  
+  for (let i = 0; i < chunks.length; i += MAX_CONCURRENT) {
+    // Verificar tiempo restante ANTES de cada batch
+    const elapsed = Date.now() - startTime;
+    const timePerChunk = elapsed / Math.max(i / MAX_CONCURRENT, 1); // Tiempo promedio por grupo
+    const estimatedTimeRemaining = timePerChunk * Math.ceil((chunks.length - i) / MAX_CONCURRENT);
+    
+    if (elapsed > maxTime * 0.4 || estimatedTimeRemaining > (maxTime - elapsed)) { // Usar máximo 40% del tiempo total
+      console.log(`⏰ Timeout preventivo en validación: procesados ${i}/${chunks.length} chunks en ${elapsed}ms`);
       break;
     }
 
-    const batchPromises = chunks.slice(i, i + MAX_CONCURRENT_REQUESTS)
+    const batchPromises = chunks.slice(i, i + MAX_CONCURRENT)
       .map(async (chunk, index) => {
         try {
-          const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
-            method: "POST",
-            headers: {
-              Authorization: `Bearer ${apiKey}`,
-              "Content-Type": "application/json",
-            },
-            body: JSON.stringify({
-              idProperty: "contact_id",
-              inputs: chunk.map((id) => ({ id })),
+          const res = await Promise.race([
+            fetch(`${HUBSPOT_BASE}/crm/v3/objects/contacts/batch/read`, {
+              method: "POST",
+              headers: {
+                Authorization: `Bearer ${apiKey}`,
+                "Content-Type": "application/json",
+              },
+              body: JSON.stringify({
+                idProperty: "contact_id",
+                inputs: chunk.map((id) => ({ id })),
+              }),
             }),
-          });
+            new Promise((_, reject) => 
+              setTimeout(() => reject(new Error('Request timeout')), 8000) // 8s timeout por request
+            )
+          ]);
 
           if (!res.ok) {
             const error = await res.text();
-            console.error(`❌ Error al consultar contactos batch ${i + index}:`, error);
+            console.error(`❌ Error chunk ${i + index}: ${res.status}`);
             return [];
           }
 
           const data = await res.json();
           return data.results || [];
         } catch (err) {
-          console.error(`❌ Excepción al consultar batch de contactos:`, err);
+          console.error(`❌ Timeout/Error chunk ${i + index}:`, err.message);
           return [];
         }
       });
 
-    const results = await Promise.all(batchPromises);
+    const results = await Promise.allSettled(batchPromises);
     
-    results.flat().forEach(contact => {
-      const customContactId = contact.properties.contact_id;
-      const hubspotId = contact.id;
-      contactIdToHubspotId.set(customContactId, hubspotId);
+    // Procesar solo resultados exitosos
+    results.forEach(result => {
+      if (result.status === 'fulfilled') {
+        result.value.forEach(contact => {
+          const customContactId = contact.properties?.contact_id;
+          const hubspotId = contact.id;
+          if (customContactId && hubspotId) {
+            contactIdToHubspotId.set(customContactId, hubspotId);
+          }
+        });  
+      }
     });
 
-    await wait(100);
+    // Pausa más corta
+    await wait(50);
   }
 
+  const validationTime = ((Date.now() - startTime) / 1000).toFixed(2);
+  console.log(`✅ Validación completada en ${validationTime}s: ${contactIdToHubspotId.size}/${contactIds.length} contactos válidos`);
+  
   return contactIdToHubspotId;
 }
 
@@ -164,44 +192,57 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
 
   console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot...`);
 
-  for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
+  // Procesar con batches más grandes y menos delays
+  const OPTIMIZED_BATCH_SIZE = 100;
+  
+  for (let i = 0; i < validDeals.length; i += OPTIMIZED_BATCH_SIZE) {
+    // Verificar tiempo restante
     const elapsed = Date.now() - startTime;
-    if (elapsed > remainingTime * 0.9) { 
+    if (elapsed > remainingTime * 0.85) { // Usar 85% del tiempo disponible
       console.log(`⏰ Timeout preventivo: procesados ${totalSubidos} de ${validDeals.length} negocios`);
       await savePartialProgress(fileName, totalSubidos, validDeals.length);
       break;
     }
 
-    const batch = validDeals.slice(i, i + BATCH_SIZE);
+    const batch = validDeals.slice(i, i + OPTIMIZED_BATCH_SIZE);
 
     try {
-      const res = await fetch(`${HUBSPOT_BASE}/crm/v3/objects/deals/batch/create`, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json",
-        },
-        body: JSON.stringify({ inputs: batch }),
-      });
+      const res = await Promise.race([
+        fetch(`${HUBSPOT_BASE}/crm/v3/objects/deals/batch/create`, {
+          method: "POST",
+          headers: {
+            Authorization: `Bearer ${apiKey}`,
+            "Content-Type": "application/json",
+          },
+          body: JSON.stringify({ inputs: batch }),
+        }),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Request timeout')), 15000) // 15s timeout por batch
+        )
+      ]);
 
       if (!res.ok) {
         const error = await res.text();
-        console.error(`❌ Error al subir batch ${i}-${i + batch.length - 1}:`, error);
+        console.error(`❌ Error al subir batch ${i}-${i + batch.length - 1}: ${res.status}`);
         totalFallidos += batch.length;
         continue;
       }
 
       console.log(`✅ Subido batch ${i}-${i + batch.length - 1}`);
       totalSubidos += batch.length;
-      if ((i / BATCH_SIZE) % 5 === 0) {
+
+      // Guardar progreso cada 10 batches
+      if ((i / OPTIMIZED_BATCH_SIZE) % 10 === 0) {
         await savePartialProgress(fileName, totalSubidos, validDeals.length);
       }
 
     } catch (err) {
-      console.error(`❌ Excepción al subir batch ${i}-${i + batch.length - 1}:`, err);
+      console.error(`❌ Timeout/Error batch ${i}-${i + batch.length - 1}:`, err.message);
       totalFallidos += batch.length;
     }
-    await wait(200);
+
+    // Pausa mínima para evitar rate limits
+    await wait(100);
   }
 
   return { totalSubidos, totalFallidos };
