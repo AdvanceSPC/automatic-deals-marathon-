@@ -19,12 +19,12 @@ const s3Read = new S3Client({
 
 export const config = {
   runtime: "nodejs",
-  maxDuration: 300, // Explícitamente configurar timeout de Vercel
+  maxDuration: 300, 
 };
 
 export default async function handler(req, res) {
   const executionStart = Date.now();
-  const MAX_EXECUTION_TIME = 280000; // 280 segundos (20s de margen)
+  const MAX_EXECUTION_TIME = 280000;
   
   console.log("🔌 Verificando conexión con buckets S3...");
 
@@ -45,7 +45,7 @@ export default async function handler(req, res) {
   const nuevosArchivos = Contents.map((obj) => obj.Key)
     .filter((key) => key.endsWith(".csv"))
     .filter((key) => !processed.includes(key))
-    .sort(); // Procesar archivos en orden
+    .sort(); 
 
   if (nuevosArchivos.length === 0) {
     console.log("🟡 No hay nuevos archivos para procesar.");
@@ -54,13 +54,12 @@ export default async function handler(req, res) {
 
   console.log(`📁 Encontrados ${nuevosArchivos.length} archivos nuevos para procesar`);
 
-  // Procesar solo UN archivo por ejecución para evitar timeouts
+  // Procesar solo 1 archivo para evitar timeouts
   const fileName = nuevosArchivos[0];
   
   try {
-    // Verificar tiempo disponible antes de procesar
     const elapsed = Date.now() - executionStart;
-    if (elapsed > MAX_EXECUTION_TIME * 0.1) { // Si ya pasó más del 10% del tiempo solo en setup
+    if (elapsed > MAX_EXECUTION_TIME * 0.1) { 
       console.log("⏰ Tiempo insuficiente para procesar archivo");
       return res.status(200).send("⏰ Tiempo insuficiente - reintentar");
     }
@@ -81,7 +80,6 @@ export default async function handler(req, res) {
     if (deals.length > 5000) {
       console.log(`📏 Archivo grande detectado (${deals.length} registros) - procesando en chunks`);
       
-      // Procesar en chunks de 2500 para archivos muy grandes
       const chunkSize = 2500;
       for (let i = 0; i < deals.length; i += chunkSize) {
         const chunk = deals.slice(i, i + chunkSize);
@@ -89,7 +87,6 @@ export default async function handler(req, res) {
         
         await sendToHubspot(chunk, `${fileName}_chunk_${Math.floor(i/chunkSize) + 1}`);
         
-        // Verificar tiempo restante
         const elapsedTime = Date.now() - executionStart;
         if (elapsedTime > MAX_EXECUTION_TIME * 0.8) {
           console.log("⏰ Tiempo límite alcanzado - guardando progreso");
@@ -100,7 +97,7 @@ export default async function handler(req, res) {
       await sendToHubspot(deals, fileName);
     }
 
-    // Marcar como procesado solo si se completó exitosamente
+    // Marcar como procesado solo si se complet
     processed.push(fileName);
     console.log(`✅ Procesado exitosamente: ${fileName}`);
     

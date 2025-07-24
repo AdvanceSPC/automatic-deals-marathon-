@@ -4,12 +4,12 @@ import { saveReportToS3, savePartialProgress } from "./s3Helpers.js";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const BATCH_SIZE = 100;
-const MAX_CONCURRENT_REQUESTS = 3; // Reducir concurrencia para evitar rate limits
+const MAX_CONCURRENT_REQUESTS = 3; 
 const CONTACT_BATCH_SIZE = 100;
 
 export async function sendToHubspot(deals, fileName) {
   const startTime = Date.now();
-  const MAX_EXECUTION_TIME = 250000; // 250 segundos (50s de margen)
+  const MAX_EXECUTION_TIME = 250000; 
   
   const apiKey = process.env.HUBSPOT_API_KEY;
   const contactIdToDeals = {};
@@ -26,7 +26,6 @@ export async function sendToHubspot(deals, fileName) {
   const allContactIds = Object.keys(contactIdToDeals);
   console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
-  // Validar contactos en paralelo con límite de concurrencia
   const contactIdToHubspotId = await validateContactsInParallel(
     allContactIds, 
     apiKey, 
@@ -35,14 +34,13 @@ export async function sendToHubspot(deals, fileName) {
 
   console.log(`✅ Contactos válidos encontrados: ${contactIdToHubspotId.size} de ${allContactIds.length}`);
 
-  // Separar deals válidos e inválidos
+  // Separar deals validos e invalidos
   const { validDeals, invalidDeals } = separateValidDeals(contactIdToDeals, contactIdToHubspotId);
 
   if (invalidDeals.length > 0) {
     logInvalidDeals(invalidDeals);
   }
 
-  // Procesar deals válidos en chunks con timeout
   const result = await processValidDealsWithTimeout(
     validDeals, 
     apiKey, 
@@ -50,7 +48,6 @@ export async function sendToHubspot(deals, fileName) {
     MAX_EXECUTION_TIME - (Date.now() - startTime)
   );
 
-  // Generar reporte final
   await generateFinalReport(deals, result, invalidDeals, fileName);
   
   return result;
@@ -60,14 +57,11 @@ async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
   const contactIdToHubspotId = new Map();
   const chunks = [];
   
-  // Dividir en chunks
   for (let i = 0; i < contactIds.length; i += CONTACT_BATCH_SIZE) {
     chunks.push(contactIds.slice(i, i + CONTACT_BATCH_SIZE));
   }
 
-  // Procesar chunks en paralelo con límite de concurrencia
   for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_REQUESTS) {
-    // Verificar tiempo restante
     if (Date.now() > remainingTime) {
       console.log("⏰ Timeout alcanzado durante validación de contactos");
       break;
@@ -104,14 +98,13 @@ async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
 
     const results = await Promise.all(batchPromises);
     
-    // Procesar resultados
     results.flat().forEach(contact => {
       const customContactId = contact.properties.contact_id;
       const hubspotId = contact.id;
       contactIdToHubspotId.set(customContactId, hubspotId);
     });
 
-    // Pequeña pausa para evitar rate limits
+    // evitar rate limits
     await wait(100);
   }
 
@@ -146,7 +139,7 @@ function separateValidDeals(contactIdToDeals, contactIdToHubspotId) {
 
 function logInvalidDeals(invalidDeals) {
   console.log(`⚠️ NEGOCIOS QUE NO SE SUBIRÁN (${invalidDeals.length}):`);
-  const samplesToShow = Math.min(invalidDeals.length, 5); // Reducir logs
+  const samplesToShow = Math.min(invalidDeals.length, 5); 
   for (let i = 0; i < samplesToShow; i++) {
     const { dealName, contactId } = invalidDeals[i];
     console.warn(`   • "${dealName}" - Contacto inexistente: ${contactId}`);
@@ -168,11 +161,9 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
 
   console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot...`);
 
-  // Procesar en chunks más pequeños con verificación de tiempo
   for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
-    // Verificar tiempo restante
     const elapsed = Date.now() - startTime;
-    if (elapsed > remainingTime * 0.9) { // Usar 90% del tiempo disponible
+    if (elapsed > remainingTime * 0.9) { 
       console.log(`⏰ Timeout preventivo: procesados ${totalSubidos} de ${validDeals.length} negocios`);
       await savePartialProgress(fileName, totalSubidos, validDeals.length);
       break;
@@ -210,7 +201,6 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
       totalFallidos += batch.length;
     }
 
-    // Pausa más corta para optimizar tiempo
     await wait(200);
   }
 
