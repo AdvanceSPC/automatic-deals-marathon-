@@ -4,7 +4,6 @@ import {
   GetObjectCommand,
   PutObjectCommand,
   ListObjectsV2Command,
-  DeleteObjectCommand,
 } from "@aws-sdk/client-s3";
 import csv from "csv-parser";
 import { Readable } from "stream";
@@ -154,75 +153,4 @@ export async function savePartialProgress(fileName, processedCount, totalCount) 
   });
   
   await s3Hist.send(command);
-}
-
-// Nueva función para manejar archivos parciales
-export async function savePartialFileProgress(fileName, processedCount, totalCount) {
-  const partialKey = `partial/${fileName.replace('.csv', '')}_partial.json`;
-  const partialData = {
-    fileName,
-    processedRecords: processedCount,
-    totalRecords: totalCount,
-    nextStartIndex: processedCount,
-    timestamp: new Date().toISOString(),
-    status: 'partial'
-  };
-  
-  const command = new PutObjectCommand({
-    Bucket: process.env.AWS2_BUCKET,
-    Key: partialKey,
-    Body: JSON.stringify(partialData, null, 2),
-    ContentType: "application/json",
-  });
-  
-  await s3Hist.send(command);
-  console.log(`💾 Progreso parcial guardado: ${processedCount}/${totalCount} registros`);
-}
-
-// Función para obtener archivos parciales pendientes
-export async function getPartialFiles() {
-  try {
-    const command = new ListObjectsV2Command({
-      Bucket: process.env.AWS2_BUCKET,
-      Prefix: "partial/",
-    });
-    
-    const response = await s3Hist.send(command);
-    const partialFiles = [];
-    
-    for (const obj of response.Contents || []) {
-      try {
-        const getCommand = new GetObjectCommand({
-          Bucket: process.env.AWS2_BUCKET,
-          Key: obj.Key,
-        });
-        const data = await s3Hist.send(getCommand);
-        const content = await data.Body.transformToString();
-        const partialInfo = JSON.parse(content);
-        partialFiles.push(partialInfo);
-      } catch (err) {
-        console.error(`Error leyendo archivo parcial ${obj.Key}:`, err);
-      }
-    }
-    
-    return partialFiles;
-  } catch (err) {
-    console.error("Error obteniendo archivos parciales:", err);
-    return [];
-  }
-}
-
-// Función para eliminar registro de archivo parcial (cuando se completa)
-export async function removePartialFile(fileName) {
-  try {
-    const partialKey = `partial/${fileName.replace('.csv', '')}_partial.json`;
-    const command = new DeleteObjectCommand({
-      Bucket: process.env.AWS2_BUCKET,
-      Key: partialKey,
-    });
-    await s3Hist.send(command);
-    console.log(`🗑️ Eliminado registro parcial: ${fileName}`);
-  } catch (err) {
-    console.error(`Error eliminando archivo parcial ${fileName}:`, err);
-  }
 }
