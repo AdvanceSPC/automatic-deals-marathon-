@@ -131,24 +131,3 @@ export async function saveReportToS3(content, fileName) {
   await s3Hist.send(command);
   console.log(`📝 Reporte guardado como: reportes/${fileName}`);
 }
-
-for (const fileName of nuevosArchivos) {
-  try {
-    process.env.CURRENT_FILENAME = fileName;
-    console.log(`⬇️ Procesando archivo: ${fileName}`);
-    const deals = await fetchCSVFromS3(fileName);
-
-    if (!deals.length) {
-      console.warn(`⚠️ Archivo vacío: ${fileName}`);
-      continue;
-    }
-
-    console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
-    await sendToHubspot(deals);
-
-    processed.push(fileName);
-    console.log(`✅ Procesado exitosamente: ${fileName}`);
-  } catch (error) {
-    console.error(`❌ Error procesando ${fileName}:`, error);
-  }
-}
