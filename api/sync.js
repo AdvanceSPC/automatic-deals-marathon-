@@ -4,6 +4,9 @@ import {
   readProcessedList,
   saveProcessedList,
   testS3Connections,
+  getPartialFiles,
+  savePartialFileProgress,
+  removePartialFile,
 } from "../utils/s3Helpers.js";
 import { sendToHubspot } from "../utils/hubspot.js";
 import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
@@ -24,7 +27,7 @@ export const config = {
 
 export default async function handler(req, res) {
   const executionStart = Date.now();
-  const MAX_EXECUTION_TIME = 280000; 
+  const MAX_EXECUTION_TIME = 280000;
   
   console.log("🔌 Verificando conexión con buckets S3...");
 
@@ -35,6 +38,9 @@ export default async function handler(req, res) {
 
   console.log("📃 Cargando historial...");
   const processed = await readProcessedList();
+  
+  console.log("🔄 Verificando archivos parciales pendientes...");
+  const partialFiles = await getPartialFiles();
 
   const command = new ListObjectsV2Command({
     Bucket: AWS1_BUCKET,
@@ -45,70 +51,155 @@ export default async function handler(req, res) {
   const nuevosArchivos = Contents.map((obj) => obj.Key)
     .filter((key) => key.endsWith(".csv"))
     .filter((key) => !processed.includes(key))
-    .sort();
+    .sort(); 
 
-  if (nuevosArchivos.length === 0) {
-    console.log("🟡 No hay nuevos archivos para procesar.");
-    return res.status(200).send("🟡 No hay archivos nuevos.");
+  const archivosParaProcesar = [];
+  
+  // Agregar archivos parciales pendientes
+  for (const partial of partialFiles) {
+    archivosParaProcesar.push({
+      fileName: partial.fileName,
+      type: 'partial',
+      startIndex: partial.nextStartIndex,
+      totalRecords: partial.totalRecords
+    });
+  }
+  
+  // Agregar archivos nuevos
+  for (const fileName of nuevosArchivos) {
+    archivosParaProcesar.push({
+      fileName,
+      type: 'new',
+      startIndex: 0
+    });
   }
 
-  console.log(`📁 Encontrados ${nuevosArchivos.length} archivos nuevos para procesar`);
+  if (archivosParaProcesar.length === 0) {
+    console.log("🟡 No hay archivos para procesar.");
+    return res.status(200).send("🟡 No hay archivos nuevos ni parciales pendientes.");
+  }
 
-  const fileName = nuevosArchivos[0];
-  
-  try {
-    const elapsed = Date.now() - executionStart;
-    if (elapsed > MAX_EXECUTION_TIME * 0.1) { 
-      console.log("⏰ Tiempo insuficiente para procesar archivo");
-      return res.status(200).send("⏰ Tiempo insuficiente - reintentar");
-    }
+  console.log(`📁 Total archivos para procesar: ${archivosParaProcesar.length} (${partialFiles.length} parciales, ${nuevosArchivos.length} nuevos)`);
 
-    console.log(`⬇️ Procesando archivo: ${fileName}`);
-    const deals = await fetchCSVFromS3(fileName);
+  let archivosCompletados = 0;
+  let archivosParciales = 0;
+  const resultados = [];
 
-    if (!deals.length) {
-      console.warn(`⚠️ Archivo vacío: ${fileName}`);
-      processed.push(fileName);
-      await saveProcessedList(processed);
-      return res.status(200).send(`⚠️ Archivo vacío procesado: ${fileName}`);
-    }
-
-    console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
+  for (const archivoInfo of archivosParaProcesar) {
+    const tiempoRestante = MAX_EXECUTION_TIME - (Date.now() - executionStart);
+    const { fileName, type, startIndex, totalRecords } = archivoInfo;
     
-    if (deals.length > 5000) {
-      console.log(`📏 Archivo grande detectado (${deals.length} registros) - procesando en chunks`);
-      
-      const chunkSize = 2500;
-      for (let i = 0; i < deals.length; i += chunkSize) {
-        const chunk = deals.slice(i, i + chunkSize);
-        console.log(`🔄 Procesando chunk ${Math.floor(i/chunkSize) + 1} de ${Math.ceil(deals.length/chunkSize)}`);
-        
-        await sendToHubspot(chunk, `${fileName}_chunk_${Math.floor(i/chunkSize) + 1}`);
-        
-        const elapsedTime = Date.now() - executionStart;
-        if (elapsedTime > MAX_EXECUTION_TIME * 0.8) {
-          console.log("⏰ Tiempo límite alcanzado - guardando progreso");
-          break;
-        }
+    if (tiempoRestante < 60000) {
+      console.log(`⏰ Tiempo insuficiente (${Math.round(tiempoRestante/1000)}s) para procesar más archivos`);
+      break;
+    }
+
+    try {
+      if (type === 'partial') {
+        console.log(`🔄 Continuando archivo parcial: ${fileName} desde registro ${startIndex}/${totalRecords}`);
+      } else {
+        console.log(`⬇️ Procesando archivo nuevo: ${fileName} (${Math.round(tiempoRestante/1000)}s restantes)`);
       }
-    } else {
-      await sendToHubspot(deals, fileName);
+      
+      const deals = await fetchCSVFromS3(fileName);
+
+      if (!deals.length) {
+        console.warn(`⚠️ Archivo vacío: ${fileName}`);
+        if (type === 'partial') await removePartialFile(fileName);
+        processed.push(fileName);
+        archivosCompletados++;
+        resultados.push({ archivo: fileName, estado: 'vacío', registros: 0 });
+        continue;
+      }
+
+      const dealsToProcess = type === 'partial' ? deals.slice(startIndex) : deals;
+      console.log(`📨 Enviando ${dealsToProcess.length} negocios a HubSpot...`);
+      const tiempoEstimadoPorRegistro = 0.03;
+      const tiempoEstimado = dealsToProcess.length * tiempoEstimadoPorRegistro * 1000;
+      const tiempoDisponibleParaArchivo = tiempoRestante - 30000; 
+      
+      if (tiempoEstimado > tiempoDisponibleParaArchivo && dealsToProcess.length > 1000) {
+        console.log(`📏 Archivo grande: ${dealsToProcess.length} registros pendientes, tiempo estimado: ${Math.round(tiempoEstimado/1000)}s`);
+        
+        const registrosPorSegundo = 1000 / (tiempoEstimadoPorRegistro * 1000);
+        const registrosAProcesar = Math.floor((tiempoDisponibleParaArchivo / 1000) * registrosPorSegundo * 0.8); // Factor de seguridad
+        
+        console.log(`🎯 Procesando ${registrosAProcesar} de ${dealsToProcess.length} registros restantes`);
+        
+        const chunk = dealsToProcess.slice(0, registrosAProcesar);
+        const resultado = await sendToHubspot(chunk, `${fileName}_partial`);
+        
+        // Actualizar progreso parcial
+        const nuevoStartIndex = startIndex + registrosAProcesar;
+        await savePartialFileProgress(fileName, nuevoStartIndex, deals.length);
+        
+        archivosParciales++;
+        resultados.push({ 
+          archivo: fileName, 
+          estado: 'parcial', 
+          registros: `${nuevoStartIndex}/${deals.length}`,
+          subidos: resultado.totalSubidos 
+        });
+        
+      } else {
+        const resultado = await sendToHubspot(dealsToProcess, fileName);
+        if (type === 'partial') {
+          await removePartialFile(fileName);
+        }
+        processed.push(fileName);
+        archivosCompletados++;
+        
+        const totalProcesado = type === 'partial' ? deals.length : dealsToProcess.length;
+        resultados.push({ 
+          archivo: fileName, 
+          estado: 'completo', 
+          registros: totalProcesado,
+          subidos: resultado.totalSubidos 
+        });
+      }
+
+      console.log(`✅ Procesado: ${fileName}`);
+      
+    } catch (error) {
+      console.error(`❌ Error procesando ${fileName}:`, error);
+      resultados.push({ 
+        archivo: fileName, 
+        estado: 'error', 
+        error: error.message 
+      });
     }
 
-    processed.push(fileName);
-    console.log(`✅ Procesado exitosamente: ${fileName}`);
-    
-  } catch (error) {
-    console.error(`❌ Error procesando ${fileName}:`, error);
-    return res.status(500).send(`❌ Error procesando ${fileName}: ${error.message}`);
+    const tiempoTranscurrido = Date.now() - executionStart;
+    if (tiempoTranscurrido > MAX_EXECUTION_TIME * 0.9) {
+      console.log(`⏰ Alcanzado 90% del tiempo límite (${Math.round(tiempoTranscurrido/1000)}s)`);
+      break;
+    }
   }
 
   console.log("💾 Actualizando historial...");
   await saveProcessedList(processed);
 
+  const partialFilesRestantes = await getPartialFiles();
+
   const executionTime = ((Date.now() - executionStart) / 1000).toFixed(2);
-  const response = `✅ Procesado archivo: ${fileName} en ${executionTime}s. ${nuevosArchivos.length - 1} archivos pendientes.`;
+  const totalSubidos = resultados.reduce((sum, r) => sum + (r.subidos || 0), 0);
   
-  console.log(response);
-  return res.status(200).send(response);
+  const resumen = `
+🎯 ================ RESUMEN DE EJECUCIÓN ================
+⏱️  Tiempo de ejecución: ${executionTime}s
+📁 Archivos encontrados: ${archivosParaProcesar.length}
+✅ Archivos completados: ${archivosCompletados}
+🔄 Archivos parciales: ${archivosParciales}
+📊 Total registros subidos: ${totalSubidos}
+
+📋 Detalle por archivo:
+${resultados.map(r => `   • ${r.archivo}: ${r.estado} ${r.registros ? `(${r.registros} registros)` : ''} ${r.subidos ? `→ ${r.subidos} subidos` : ''}`).join('\n')}
+
+${partialFilesRestantes.length > 0 ? `🔄 Archivos parciales pendientes: ${partialFilesRestantes.length}` : ''}
+${nuevosArchivos.length - archivosCompletados > 0 ? `⏳ Archivos nuevos pendientes: ${nuevosArchivos.length - archivosCompletados}` : ''}
+${partialFilesRestantes.length === 0 && nuevosArchivos.length - archivosCompletados === 0 ? '🎉 Todos los archivos procesados completamente' : ''}
+======================================================`.trim();
+
+  console.log(resumen);
+  return res.status(200).send(resumen);
 }

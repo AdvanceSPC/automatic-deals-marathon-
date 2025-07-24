@@ -1,15 +1,16 @@
+
 // utils/hubspot.js
 import fetch from "node-fetch";
 import { saveReportToS3, savePartialProgress } from "./s3Helpers.js";
 
 const HUBSPOT_BASE = "https://api.hubapi.com";
 const BATCH_SIZE = 100;
-const MAX_CONCURRENT_REQUESTS = 3;
+const MAX_CONCURRENT_REQUESTS = 3; 
 const CONTACT_BATCH_SIZE = 100;
 
 export async function sendToHubspot(deals, fileName) {
   const startTime = Date.now();
-  const MAX_EXECUTION_TIME = 250000; 
+  const MAX_EXECUTION_TIME = 250000;
   
   const apiKey = process.env.HUBSPOT_API_KEY;
   const contactIdToDeals = {};
@@ -26,6 +27,7 @@ export async function sendToHubspot(deals, fileName) {
   const allContactIds = Object.keys(contactIdToDeals);
   console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
+  // Validar contactos en paralelo con límite de concurrencia
   const contactIdToHubspotId = await validateContactsInParallel(
     allContactIds, 
     apiKey, 
@@ -34,12 +36,14 @@ export async function sendToHubspot(deals, fileName) {
 
   console.log(`✅ Contactos válidos encontrados: ${contactIdToHubspotId.size} de ${allContactIds.length}`);
 
+  // Separar deals válidos e inválidos
   const { validDeals, invalidDeals } = separateValidDeals(contactIdToDeals, contactIdToHubspotId);
 
   if (invalidDeals.length > 0) {
     logInvalidDeals(invalidDeals);
   }
 
+  // Procesar deals válidos en chunks con timeout
   const result = await processValidDealsWithTimeout(
     validDeals, 
     apiKey, 
@@ -47,6 +51,7 @@ export async function sendToHubspot(deals, fileName) {
     MAX_EXECUTION_TIME - (Date.now() - startTime)
   );
 
+  // Generar reporte final
   await generateFinalReport(deals, result, invalidDeals, fileName);
   
   return result;
@@ -102,6 +107,7 @@ async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
       const hubspotId = contact.id;
       contactIdToHubspotId.set(customContactId, hubspotId);
     });
+
     await wait(100);
   }
 
@@ -157,9 +163,10 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
   }
 
   console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot...`);
+
   for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
     const elapsed = Date.now() - startTime;
-    if (elapsed > remainingTime * 0.9) { // Usar 90% del tiempo disponible
+    if (elapsed > remainingTime * 0.9) { 
       console.log(`⏰ Timeout preventivo: procesados ${totalSubidos} de ${validDeals.length} negocios`);
       await savePartialProgress(fileName, totalSubidos, validDeals.length);
       break;
@@ -186,7 +193,6 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
 
       console.log(`✅ Subido batch ${i}-${i + batch.length - 1}`);
       totalSubidos += batch.length;
-
       if ((i / BATCH_SIZE) % 5 === 0) {
         await savePartialProgress(fileName, totalSubidos, validDeals.length);
       }
