@@ -7,9 +7,8 @@ const BATCH_SIZE = 100;
 const MAX_CONCURRENT_REQUESTS = 3; 
 const CONTACT_BATCH_SIZE = 100;
 
-export async function sendToHubspot(deals, fileName) {
+export async function sendToHubspot(deals, fileName, maxExecutionTime = 240000) {
   const startTime = Date.now();
-  const MAX_EXECUTION_TIME = 250000; 
   
   const apiKey = process.env.HUBSPOT_API_KEY;
   const contactIdToDeals = {};
@@ -26,10 +25,13 @@ export async function sendToHubspot(deals, fileName) {
   const allContactIds = Object.keys(contactIdToDeals);
   console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
+  // Reservar al menos 60% del tiempo para validación de contactos
+  const timeForContactValidation = Math.min(maxExecutionTime * 0.6, 120000);
+  
   const contactIdToHubspotId = await validateContactsInParallel(
     allContactIds, 
     apiKey, 
-    MAX_EXECUTION_TIME - (Date.now() - startTime)
+    timeForContactValidation
   );
 
   console.log(`✅ Contactos válidos encontrados: ${contactIdToHubspotId.size} de ${allContactIds.length}`);
@@ -41,11 +43,14 @@ export async function sendToHubspot(deals, fileName) {
     logInvalidDeals(invalidDeals);
   }
 
+  // Usar el tiempo restante para procesar deals
+  const remainingTime = maxExecutionTime - (Date.now() - startTime);
+  
   const result = await processValidDealsWithTimeout(
     validDeals, 
     apiKey, 
     fileName,
-    MAX_EXECUTION_TIME - (Date.now() - startTime)
+    remainingTime
   );
 
   await generateFinalReport(deals, result, invalidDeals, fileName);
@@ -53,7 +58,8 @@ export async function sendToHubspot(deals, fileName) {
   return result;
 }
 
-async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
+async function validateContactsInParallel(contactIds, apiKey, maxTime) {
+  const startTime = Date.now();
   const contactIdToHubspotId = new Map();
   const chunks = [];
   
@@ -61,9 +67,12 @@ async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
     chunks.push(contactIds.slice(i, i + CONTACT_BATCH_SIZE));
   }
 
+  console.log(`🔍 Validando ${contactIds.length} contactos en ${chunks.length} chunks con ${Math.round(maxTime/1000)}s disponibles`);
+
   for (let i = 0; i < chunks.length; i += MAX_CONCURRENT_REQUESTS) {
-    if (Date.now() > remainingTime) {
-      console.log("⏰ Timeout alcanzado durante validación de contactos");
+    const elapsed = Date.now() - startTime;
+    if (elapsed > maxTime) {
+      console.log(`⏰ Timeout alcanzado durante validación de contactos (${Math.round(elapsed/1000)}s transcurridos)`);
       break;
     }
 
@@ -84,7 +93,7 @@ async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
 
           if (!res.ok) {
             const error = await res.text();
-            console.error(`❌ Error al consultar contactos batch ${i + index}:`, error);
+            console.error(`❌ Error al consultar contactos batch ${i + index + 1}:`, error);
             return [];
           }
 
@@ -104,9 +113,18 @@ async function validateContactsInParallel(contactIds, apiKey, remainingTime) {
       contactIdToHubspotId.set(customContactId, hubspotId);
     });
 
+    // Mostrar progreso cada 10 batches
+    if ((i / MAX_CONCURRENT_REQUESTS) % 10 === 0) {
+      const processed = Math.min(i + MAX_CONCURRENT_REQUESTS, chunks.length);
+      console.log(`🔍 Validados ${processed}/${chunks.length} batches de contactos`);
+    }
+
     // evitar rate limits
     await wait(100);
   }
+
+  const elapsedTotal = Date.now() - startTime;
+  console.log(`✅ Validación completada en ${Math.round(elapsedTotal/1000)}s`);
 
   return contactIdToHubspotId;
 }
@@ -159,12 +177,12 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
     return { totalSubidos, totalFallidos };
   }
 
-  console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot...`);
+  console.log(`🚀 Enviando ${validDeals.length} negocios válidos a HubSpot con ${Math.round(remainingTime/1000)}s disponibles...`);
 
   for (let i = 0; i < validDeals.length; i += BATCH_SIZE) {
     const elapsed = Date.now() - startTime;
     if (elapsed > remainingTime * 0.9) { 
-      console.log(`⏰ Timeout preventivo: procesados ${totalSubidos} de ${validDeals.length} negocios`);
+      console.log(`⏰ Timeout preventivo: procesados ${totalSubidos} de ${validDeals.length} negocios (${Math.round(elapsed/1000)}s transcurridos)`);
       await savePartialProgress(fileName, totalSubidos, validDeals.length);
       break;
     }

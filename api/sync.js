@@ -24,7 +24,8 @@ export const config = {
 
 export default async function handler(req, res) {
   const executionStart = Date.now();
-  const MAX_EXECUTION_TIME = 280000;
+  // Aumentar el tiempo máximo a 290 segundos (290000ms)
+  const MAX_EXECUTION_TIME = 290000;
   
   console.log("🔌 Verificando conexión con buckets S3...");
 
@@ -59,7 +60,8 @@ export default async function handler(req, res) {
   
   try {
     const elapsed = Date.now() - executionStart;
-    if (elapsed > MAX_EXECUTION_TIME * 0.1) { 
+    // Reducir el check inicial a 5% del tiempo total
+    if (elapsed > MAX_EXECUTION_TIME * 0.05) { 
       console.log("⏰ Tiempo insuficiente para procesar archivo");
       return res.status(200).send("⏰ Tiempo insuficiente - reintentar");
     }
@@ -81,25 +83,53 @@ export default async function handler(req, res) {
       console.log(`📏 Archivo grande detectado (${deals.length} registros) - procesando en chunks`);
       
       const chunkSize = 2500;
+      let processedChunks = 0;
+      let totalProcessed = 0;
+      
       for (let i = 0; i < deals.length; i += chunkSize) {
         const chunk = deals.slice(i, i + chunkSize);
-        console.log(`🔄 Procesando chunk ${Math.floor(i/chunkSize) + 1} de ${Math.ceil(deals.length/chunkSize)}`);
+        const chunkNumber = Math.floor(i/chunkSize) + 1;
+        const totalChunks = Math.ceil(deals.length/chunkSize);
         
-        await sendToHubspot(chunk, `${fileName}_chunk_${Math.floor(i/chunkSize) + 1}`);
+        console.log(`🔄 Procesando chunk ${chunkNumber} de ${totalChunks}`);
         
+        // Calcular tiempo restante para este chunk
         const elapsedTime = Date.now() - executionStart;
-        if (elapsedTime > MAX_EXECUTION_TIME * 0.8) {
-          console.log("⏰ Tiempo límite alcanzado - guardando progreso");
+        const remainingTime = MAX_EXECUTION_TIME - elapsedTime;
+        
+        // Necesitamos al menos 30 segundos para procesar un chunk
+        if (remainingTime < 30000) {
+          console.log(`⏰ Tiempo insuficiente para chunk ${chunkNumber} (${Math.round(remainingTime/1000)}s restantes)`);
+          break;
+        }
+        
+        const result = await sendToHubspot(chunk, `${fileName}_chunk_${chunkNumber}`, remainingTime);
+        processedChunks++;
+        totalProcessed += chunk.length;
+        
+        // Verificar tiempo después de cada chunk
+        const newElapsedTime = Date.now() - executionStart;
+        if (newElapsedTime > MAX_EXECUTION_TIME * 0.85) {
+          console.log(`⏰ Límite de tiempo alcanzado después del chunk ${chunkNumber}`);
+          console.log(`📊 Procesados ${processedChunks}/${totalChunks} chunks (${totalProcessed}/${deals.length} registros)`);
           break;
         }
       }
+      
+      // Solo marcar como completamente procesado si se procesaron todos los chunks
+      if (processedChunks === Math.ceil(deals.length/chunkSize)) {
+        processed.push(fileName);
+        console.log(`✅ Procesado exitosamente: ${fileName} (todos los chunks completados)`);
+      } else {
+        console.log(`⚠️ Procesamiento parcial: ${fileName} (${processedChunks}/${Math.ceil(deals.length/chunkSize)} chunks)`);
+      }
+      
     } else {
-      await sendToHubspot(deals, fileName);
+      const remainingTime = MAX_EXECUTION_TIME - (Date.now() - executionStart);
+      await sendToHubspot(deals, fileName, remainingTime);
+      processed.push(fileName);
+      console.log(`✅ Procesado exitosamente: ${fileName}`);
     }
-
-    // Marcar como procesado solo si se complet
-    processed.push(fileName);
-    console.log(`✅ Procesado exitosamente: ${fileName}`);
     
   } catch (error) {
     console.error(`❌ Error procesando ${fileName}:`, error);
