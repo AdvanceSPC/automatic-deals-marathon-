@@ -127,17 +127,17 @@ export async function testS3Connections() {
 export async function saveReportToS3(content, fileName) {
   const command = new PutObjectCommand({
     Bucket: process.env.AWS2_BUCKET,
-    Key: `reportes/${fileName}`,
+    Key: `reportes_negocios/${fileName}`,
     Body: content,
     ContentType: "text/plain",
   });
   await s3Hist.send(command);
-  console.log(`📝 Reporte guardado como: reportes/${fileName}`);
+  console.log(`📝 Reporte guardado como: reportes_negocios/${fileName}`);
 }
 
 // guardar progreso parcial
 export async function savePartialProgress(fileName, processedCount, totalCount) {
-  const progressKey = `progress/${fileName.replace('.csv', '')}_progress.json`;
+  const progressKey = `progress_negocios/${fileName.replace('.csv', '')}_progress.json`;
   const progressData = {
     fileName,
     processedCount,
@@ -158,7 +158,7 @@ export async function savePartialProgress(fileName, processedCount, totalCount) 
 
 export async function getFileProgress(fileName) {
   try {
-    const progressKey = `file_progress/${fileName.replace('.csv', '')}_file_progress.json`;
+    const progressKey = `file_progress_negocios/${fileName.replace('.csv', '')}_file_progress.json`;
     const command = new GetObjectCommand({
       Bucket: process.env.AWS2_BUCKET,
       Key: progressKey,
@@ -172,7 +172,7 @@ export async function getFileProgress(fileName) {
 }
 
 export async function saveFileProgress(fileName, progressData) {
-  const progressKey = `file_progress/${fileName.replace('.csv', '')}_file_progress.json`;
+  const progressKey = `file_progress_negocios/${fileName.replace('.csv', '')}_file_progress.json`;
   const fullProgressData = {
     fileName,
     ...progressData,
@@ -191,7 +191,7 @@ export async function saveFileProgress(fileName, progressData) {
 }
 
 export async function markChunkAsCompleted(fileName, chunkNumber, recordsCount) {
-  const chunkKey = `chunks/${fileName.replace('.csv', '')}_chunk_${chunkNumber}.json`;
+  const chunkKey = `chunks_negocios/${fileName.replace('.csv', '')}_chunk_${chunkNumber}.json`;
   const chunkData = {
     fileName,
     chunkNumber,
@@ -212,7 +212,7 @@ export async function markChunkAsCompleted(fileName, chunkNumber, recordsCount) 
 
 export async function getCompletedChunks(fileName) {
   try {
-    const prefix = `chunks/${fileName.replace('.csv', '')}_chunk_`;
+    const prefix = `chunks_negocios${fileName.replace('.csv', '')}_chunk_`;
     const command = new ListObjectsV2Command({
       Bucket: process.env.AWS2_BUCKET,
       Prefix: prefix,
@@ -245,8 +245,8 @@ export async function getCompletedChunks(fileName) {
 
 export async function cleanupFileProgress(fileName) {
   const filesToCleanup = [
-    `file_progress/${fileName.replace('.csv', '')}_file_progress.json`,
-    `progress/${fileName.replace('.csv', '')}_progress.json`
+    `file_progress_negocios/${fileName.replace('.csv', '')}_file_progress.json`,
+    `progress_negocios/${fileName.replace('.csv', '')}_progress.json`
   ];
   
   for (const key of filesToCleanup) {
