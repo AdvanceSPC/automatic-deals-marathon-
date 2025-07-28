@@ -29,15 +29,22 @@ export default async function handler(req, res) {
   const executionStart = Date.now();
   const MAX_EXECUTION_TIME = 290000;
   
+  console.log(`\n🚀 ================== INICIO DE SINCRONIZACIÓN ==================`);
+  console.log(`⏰ Tiempo máximo de ejecución: ${Math.round(MAX_EXECUTION_TIME/1000)}s`);
+  console.log(`🕒 Inicio: ${new Date().toLocaleString('es-EC')}`);
+  
   console.log("🔌 Verificando conexión con buckets S3...");
 
   const s3Ok = await testS3Connections();
   if (!s3Ok) {
+    console.error("❌ Error crítico: No se pudo conectar a los buckets S3");
     return res.status(500).send("❌ Fallo en conexión a uno o ambos buckets S3.");
   }
+  console.log("✅ Conexión a buckets S3 exitosa");
 
-  console.log("📃 Cargando historial...");
+  console.log("📃 Cargando historial de archivos procesados...");
   const processed = await readProcessedList();
+  console.log(`📋 Archivos ya procesados: ${processed.length}`);
 
   const command = new ListObjectsV2Command({
     Bucket: AWS1_BUCKET,
@@ -50,12 +57,28 @@ export default async function handler(req, res) {
     .filter((key) => !processed.includes(key))
     .sort(); 
 
+  console.log(`\n📁 ================== ANÁLISIS DE ARCHIVOS ==================`);
+  console.log(`📂 Total archivos en bucket: ${Contents.length}`);
+  console.log(`📄 Archivos CSV encontrados: ${Contents.filter(obj => obj.Key.endsWith('.csv')).length}`);
+  console.log(`✅ Archivos ya procesados: ${processed.length}`);
+  console.log(`🆕 Archivos nuevos para procesar: ${nuevosArchivos.length}`);
+  
+  if (nuevosArchivos.length > 0) {
+    console.log(`📋 Lista de archivos nuevos:`);
+    nuevosArchivos.slice(0, 5).forEach((file, index) => {
+      console.log(`   ${index + 1}. ${file}`);
+    });
+    if (nuevosArchivos.length > 5) {
+      console.log(`   ... y ${nuevosArchivos.length - 5} archivos más`);
+    }
+  }
+  console.log(`===============================================================\n`);
+
   if (nuevosArchivos.length === 0) {
     console.log("🟡 No hay nuevos archivos para procesar.");
+    console.log(`🕒 Ejecución completada en ${((Date.now() - executionStart) / 1000).toFixed(2)}s`);
     return res.status(200).send("🟡 No hay archivos nuevos.");
   }
-
-  console.log(`📁 Encontrados ${nuevosArchivos.length} archivos nuevos para procesar`);
 
   // Procesar solo 1 archivo para evitar timeouts
   const fileName = nuevosArchivos[0];
@@ -67,41 +90,60 @@ export default async function handler(req, res) {
       return res.status(200).send("⏰ Tiempo insuficiente - reintentar");
     }
 
-    console.log(`⬇️ Procesando archivo: ${fileName}`);
+    console.log(`\n⬇️ ================== PROCESANDO ARCHIVO ==================`);
+    console.log(`📄 Archivo seleccionado: ${fileName}`);
     
     // Verificar si el archivo ya tiene progreso parcial
     const fileProgress = await getFileProgress(fileName);
     let deals;
     
     if (fileProgress && fileProgress.totalRecords) {
-      console.log(`🔄 Continuando procesamiento de ${fileName} desde chunk ${fileProgress.lastCompletedChunk + 1}`);
-      console.log(`📊 Progreso anterior: ${fileProgress.processedRecords}/${fileProgress.totalRecords} registros`);
+      console.log(`🔄 REANUDANDO procesamiento de ${fileName}`);
+      console.log(`📊 Progreso anterior encontrado:`);
+      console.log(`   • Total registros: ${fileProgress.totalRecords}`);
+      console.log(`   • Chunks completados: ${fileProgress.lastCompletedChunk}/${fileProgress.totalChunks}`);
+      console.log(`   • Registros procesados: ${fileProgress.processedRecords}/${fileProgress.totalRecords}`);
+      console.log(`   • Estado: ${fileProgress.status}`);
+      console.log(`   • Última actualización: ${fileProgress.lastUpdated}`);
     } else {
-      console.log(`🆕 Iniciando nuevo procesamiento de ${fileName}`);
+      console.log(`🆕 INICIANDO nuevo procesamiento de ${fileName}`);
     }
     
+    console.log(`\n📥 Descargando y parseando CSV desde S3...`);
     deals = await fetchCSVFromS3(fileName);
 
     if (!deals.length) {
-      console.warn(`⚠️ Archivo vacío: ${fileName}`);
+      console.warn(`⚠️ ARCHIVO VACÍO detectado: ${fileName}`);
+      console.warn(`   • No se encontraron deals válidos para procesar`);
+      console.warn(`   • Marcando archivo como procesado`);
       processed.push(fileName);
       await saveProcessedList(processed);
-      return res.status(200).send(`⚠️ Archivo vacío procesado: ${fileName}`);
+      const warningMsg = `⚠️ Archivo vacío procesado: ${fileName}`;
+      console.log(warningMsg);
+      return res.status(200).send(warningMsg);
     }
 
-    console.log(`📨 Enviando ${deals.length} negocios a HubSpot...`);
+    console.log(`\n📊 ================== ESTRATEGIA DE PROCESAMIENTO ==================`);
+    console.log(`📄 Total deals válidos extraídos del CSV: ${deals.length}`);
     
     // Verificar si el archivo es muy grande y necesita procesamiento parcial
     if (deals.length > 5000) {
-      console.log(`📏 Archivo grande detectado (${deals.length} registros) - procesando en chunks`);
+      console.log(`📏 ARCHIVO GRANDE detectado (${deals.length} registros) - procesando en chunks`);
       
       const chunkSize = 2500;
       const totalChunks = Math.ceil(deals.length / chunkSize);
       let processedChunks = fileProgress ? fileProgress.lastCompletedChunk : 0;
       let totalProcessed = fileProgress ? fileProgress.processedRecords : 0;
       
+      console.log(`📊 Configuración de chunks:`);
+      console.log(`   • Tamaño de chunk: ${chunkSize} deals`);
+      console.log(`   • Total chunks: ${totalChunks}`);
+      console.log(`   • Chunks ya completados: ${processedChunks}`);
+      console.log(`   • Chunk inicial: ${processedChunks + 1}`);
+      
       // Guardar el total de registros si es la primera vez
       if (!fileProgress || !fileProgress.totalRecords) {
+        console.log(`💾 Guardando metadata inicial del archivo...`);
         await saveFileProgress(fileName, {
           totalRecords: deals.length,
           totalChunks: totalChunks,
@@ -113,21 +155,31 @@ export default async function handler(req, res) {
       
       // Comenzar desde el siguiente chunk no completado
       const startChunk = processedChunks;
+      console.log(`🔄 Iniciando procesamiento desde chunk ${startChunk + 1}...`);
       
       for (let i = startChunk * chunkSize; i < deals.length; i += chunkSize) {
         const chunk = deals.slice(i, i + chunkSize);
         const chunkNumber = Math.floor(i/chunkSize) + 1;
         
-        console.log(`🔄 Procesando chunk ${chunkNumber} de ${totalChunks}`);
+        console.log(`\n🔄 ================== PROCESANDO CHUNK ${chunkNumber}/${totalChunks} ==================`);
+        console.log(`📊 Deals en este chunk: ${chunk.length}`);
+        console.log(`📈 Progreso general: ${((chunkNumber-1)/totalChunks*100).toFixed(1)}%`);
         
         // Calcular tiempo restante para este chunk
         const elapsedTime = Date.now() - executionStart;
         const remainingTime = MAX_EXECUTION_TIME - elapsedTime;
         
+        console.log(`⏰ Tiempo transcurrido: ${Math.round(elapsedTime/1000)}s`);
+        console.log(`⏰ Tiempo restante: ${Math.round(remainingTime/1000)}s`);
+        
         // Necesitamos al menos 30 segundos para procesar un chunk
         if (remainingTime < 30000) {
-          console.log(`⏰ Tiempo insuficiente para chunk ${chunkNumber} (${Math.round(remainingTime/1000)}s restantes)`);
-          console.log(`📊 Progreso actual: ${processedChunks}/${totalChunks} chunks (${totalProcessed}/${deals.length} registros)`);
+          console.log(`\n⏰ ================== TIMEOUT PREVENTIVO ==================`);
+          console.log(`⚠️ Tiempo insuficiente para chunk ${chunkNumber} (${Math.round(remainingTime/1000)}s restantes)`);
+          console.log(`📊 Estado actual:`);
+          console.log(`   • Chunks completados: ${processedChunks}/${totalChunks}`);
+          console.log(`   • Registros procesados: ${totalProcessed}/${deals.length}`);
+          console.log(`   • Porcentaje completado: ${((processedChunks/totalChunks)*100).toFixed(1)}%`);
           
           // Guardar progreso antes de salir
           await saveFileProgress(fileName, {
@@ -138,9 +190,12 @@ export default async function handler(req, res) {
             status: 'processing'
           });
           
-          return res.status(200).send(`⏰ Procesamiento parcial: ${processedChunks}/${totalChunks} chunks completados`);
+          const timeoutMsg = `⏰ Procesamiento parcial: ${processedChunks}/${totalChunks} chunks completados`;
+          console.log(`🔄 Necesario ejecutar nuevamente para continuar`);
+          return res.status(200).send(timeoutMsg);
         }
         
+        console.log(`🚀 Enviando chunk ${chunkNumber} a HubSpot...`);
         const result = await sendToHubspot(chunk, `${fileName}_chunk_${chunkNumber}`, remainingTime);
         
         // Marcar chunk como completado
@@ -148,7 +203,12 @@ export default async function handler(req, res) {
         processedChunks++;
         totalProcessed += chunk.length;
         
-        console.log(`✅ Chunk ${chunkNumber} completado. Progreso: ${processedChunks}/${totalChunks}`);
+        console.log(`\n✅ ================== CHUNK ${chunkNumber} COMPLETADO ==================`);
+        console.log(`✅ Chunk ${chunkNumber}/${totalChunks} procesado exitosamente`);
+        console.log(`📊 Progreso actualizado:`);
+        console.log(`   • Chunks completados: ${processedChunks}/${totalChunks} (${((processedChunks/totalChunks)*100).toFixed(1)}%)`);
+        console.log(`   • Registros procesados: ${totalProcessed}/${deals.length} (${((totalProcessed/deals.length)*100).toFixed(1)}%)`);
+        console.log(`   • Deals subidos en este chunk: ${result.totalSubidos || 0}`);
         
         // Actualizar progreso
         await saveFileProgress(fileName, {
@@ -162,14 +222,29 @@ export default async function handler(req, res) {
         // Verificar tiempo después de cada chunk
         const newElapsedTime = Date.now() - executionStart;
         if (newElapsedTime > MAX_EXECUTION_TIME * 0.85) {
-          console.log(`⏰ Límite de tiempo alcanzado después del chunk ${chunkNumber}`);
-          console.log(`📊 Procesados ${processedChunks}/${totalChunks} chunks (${totalProcessed}/${deals.length} registros)`);
-          return res.status(200).send(`⏰ Procesamiento parcial: ${processedChunks}/${totalChunks} chunks completados`);
+          console.log(`\n⏰ ================== LÍMITE DE TIEMPO ALCANZADO ==================`);
+          console.log(`⏰ Límite de tiempo preventivo alcanzado después del chunk ${chunkNumber}`);
+          console.log(`⏱️ Tiempo transcurrido: ${Math.round(newElapsedTime/1000)}s de ${Math.round(MAX_EXECUTION_TIME/1000)}s`);
+          console.log(`📊 Estado final de esta ejecución:`);
+          console.log(`   • Chunks completados: ${processedChunks}/${totalChunks}`);
+          console.log(`   • Registros procesados: ${totalProcessed}/${deals.length}`);
+          console.log(`   • Progreso: ${((processedChunks/totalChunks)*100).toFixed(1)}%`);
+          console.log(`🔄 Se requiere otra ejecución para completar el archivo`);
+          
+          const partialMsg = `⏰ Procesamiento parcial: ${processedChunks}/${totalChunks} chunks completados`;
+          return res.status(200).send(partialMsg);
         }
       }
       
       // Solo marcar como completamente procesado si se procesaron todos los chunks
       if (processedChunks === totalChunks) {
+        console.log(`\n🎉 ================== ARCHIVO COMPLETAMENTE PROCESADO ==================`);
+        console.log(`✅ TODOS los chunks procesados exitosamente`);
+        console.log(`📊 Resumen final:`);
+        console.log(`   • Total chunks: ${totalChunks}`);
+        console.log(`   • Total registros: ${deals.length}`);
+        console.log(`   • Archivo: ${fileName}`);
+        
         processed.push(fileName);
         await saveFileProgress(fileName, {
           totalRecords: deals.length,
@@ -178,30 +253,51 @@ export default async function handler(req, res) {
           lastCompletedChunk: processedChunks,
           status: 'completed'
         });
-        console.log(`✅ Procesado exitosamente: ${fileName} (todos los chunks completados)`);
+        console.log(`✅ Archivo marcado como completamente procesado: ${fileName}`);
       } else {
-        console.log(`⚠️ Procesamiento parcial: ${fileName} (${processedChunks}/${totalChunks} chunks)`);
-        return res.status(200).send(`⚠️ Procesamiento parcial: ${processedChunks}/${totalChunks} chunks completados`);
+        console.log(`\n⚠️ ================== PROCESAMIENTO PARCIAL ==================`);
+        console.log(`⚠️ Procesamiento parcial completado para esta ejecución`);
+        console.log(`📊 Estado: ${fileName} (${processedChunks}/${totalChunks} chunks)`);
+        const partialMsg = `⚠️ Procesamiento parcial: ${processedChunks}/${totalChunks} chunks completados`;
+        return res.status(200).send(partialMsg);
       }
       
     } else {
+      console.log(`📄 Archivo de tamaño normal (${deals.length} registros) - procesamiento directo`);
       const remainingTime = MAX_EXECUTION_TIME - (Date.now() - executionStart);
+      console.log(`⏰ Tiempo disponible para procesamiento: ${Math.round(remainingTime/1000)}s`);
+      
       await sendToHubspot(deals, fileName, remainingTime);
       processed.push(fileName);
-      console.log(`✅ Procesado exitosamente: ${fileName}`);
+      console.log(`✅ Archivo procesado exitosamente: ${fileName}`);
     }
     
   } catch (error) {
-    console.error(`❌ Error procesando ${fileName}:`, error);
-    return res.status(500).send(`❌ Error procesando ${fileName}: ${error.message}`);
+    console.error(`\n❌ ================== ERROR CRÍTICO ==================`);
+    console.error(`❌ Error procesando archivo: ${fileName}`);
+    console.error(`🔍 Detalles del error:`, error);
+    console.error(`📍 Stack trace:`, error.stack);
+    console.error(`⏰ Tiempo transcurrido hasta error: ${Math.round((Date.now() - executionStart)/1000)}s`);
+    console.error(`========================================================`);
+    
+    const errorMsg = `❌ Error procesando ${fileName}: ${error.message}`;
+    return res.status(500).send(errorMsg);
   }
 
-  console.log("💾 Actualizando historial...");
+  console.log(`\n💾 ================== ACTUALIZANDO HISTORIAL ==================`);
+  console.log("💾 Guardando lista de archivos procesados...");
   await saveProcessedList(processed);
+  console.log(`✅ Historial actualizado. Total archivos procesados: ${processed.length}`);
 
   const executionTime = ((Date.now() - executionStart) / 1000).toFixed(2);
   const response = `✅ Procesado archivo: ${fileName} en ${executionTime}s. ${nuevosArchivos.length - 1} archivos pendientes.`;
   
-  console.log(response);
+  console.log(`\n🎯 ================== EJECUCIÓN COMPLETADA ==================`);
+  console.log(`✅ Archivo procesado: ${fileName}`);
+  console.log(`⏱️ Tiempo total de ejecución: ${executionTime}s`);
+  console.log(`📋 Archivos pendientes: ${nuevosArchivos.length - 1}`);
+  console.log(`🕒 Finalización: ${new Date().toLocaleString('es-EC')}`);
+  console.log(`===============================================================\n`);
+  
   return res.status(200).send(response);
 }
