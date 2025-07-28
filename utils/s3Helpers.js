@@ -154,3 +154,114 @@ export async function savePartialProgress(fileName, processedCount, totalCount) 
   
   await s3Hist.send(command);
 }
+
+// ===== NUEVAS FUNCIONES PARA SISTEMA DE REANUDACIÓN =====
+
+export async function getFileProgress(fileName) {
+  try {
+    const progressKey = `file_progress/${fileName.replace('.csv', '')}_file_progress.json`;
+    const command = new GetObjectCommand({
+      Bucket: process.env.AWS2_BUCKET,
+      Key: progressKey,
+    });
+    const response = await s3Hist.send(command);
+    const stream = await response.Body.transformToString();
+    return JSON.parse(stream);
+  } catch {
+    return null;
+  }
+}
+
+export async function saveFileProgress(fileName, progressData) {
+  const progressKey = `file_progress/${fileName.replace('.csv', '')}_file_progress.json`;
+  const fullProgressData = {
+    fileName,
+    ...progressData,
+    lastUpdated: new Date().toISOString()
+  };
+  
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS2_BUCKET,
+    Key: progressKey,
+    Body: JSON.stringify(fullProgressData, null, 2),
+    ContentType: "application/json",
+  });
+  
+  await s3Hist.send(command);
+  console.log(`💾 Progreso actualizado: ${progressData.processedRecords}/${progressData.totalRecords} registros`);
+}
+
+export async function markChunkAsCompleted(fileName, chunkNumber, recordsCount) {
+  const chunkKey = `chunks/${fileName.replace('.csv', '')}_chunk_${chunkNumber}.json`;
+  const chunkData = {
+    fileName,
+    chunkNumber,
+    recordsCount,
+    status: 'completed',
+    completedAt: new Date().toISOString()
+  };
+  
+  const command = new PutObjectCommand({
+    Bucket: process.env.AWS2_BUCKET,
+    Key: chunkKey,
+    Body: JSON.stringify(chunkData, null, 2),
+    ContentType: "application/json",
+  });
+  
+  await s3Hist.send(command);
+}
+
+export async function getCompletedChunks(fileName) {
+  try {
+    const prefix = `chunks/${fileName.replace('.csv', '')}_chunk_`;
+    const command = new ListObjectsV2Command({
+      Bucket: process.env.AWS2_BUCKET,
+      Prefix: prefix,
+    });
+    
+    const response = await s3Hist.send(command);
+    const completedChunks = [];
+    
+    if (response.Contents) {
+      for (const object of response.Contents) {
+        try {
+          const chunkCommand = new GetObjectCommand({
+            Bucket: process.env.AWS2_BUCKET,
+            Key: object.Key,
+          });
+          const chunkResponse = await s3Hist.send(chunkCommand);
+          const chunkData = JSON.parse(await chunkResponse.Body.transformToString());
+          completedChunks.push(chunkData);
+        } catch (error) {
+          console.warn(`⚠️ Error leyendo chunk ${object.Key}:`, error);
+        }
+      }
+    }
+    
+    return completedChunks.sort((a, b) => a.chunkNumber - b.chunkNumber);
+  } catch {
+    return [];
+  }
+}
+
+export async function cleanupFileProgress(fileName) {
+  // Limpiar archivos de progreso cuando un archivo se complete exitosamente
+  const filesToCleanup = [
+    `file_progress/${fileName.replace('.csv', '')}_file_progress.json`,
+    `progress/${fileName.replace('.csv', '')}_progress.json`
+  ];
+  
+  for (const key of filesToCleanup) {
+    try {
+      const command = new PutObjectCommand({
+        Bucket: process.env.AWS2_BUCKET,
+        Key: key,
+        Body: JSON.stringify({ status: 'archived', completedAt: new Date().toISOString() }),
+        ContentType: "application/json",
+      });
+      await s3Hist.send(command);
+    } catch (error) {
+      console.warn(`⚠️ Error limpiando ${key}:`, error);
+    }
+  }
+}
