@@ -1,3 +1,4 @@
+//Negocios
 // utils/hubspot.js
 import fetch from "node-fetch";
 import { saveReportToS3, savePartialProgress } from "./s3Helpers.js";
@@ -25,7 +26,6 @@ export async function sendToHubspot(deals, fileName, maxExecutionTime = 240000) 
   const allContactIds = Object.keys(contactIdToDeals);
   console.log(`🔍 Total contactos únicos referenciados: ${allContactIds.length}`);
 
-  // Reservar al menos 60% del tiempo para validación de contactos
   const timeForContactValidation = Math.min(maxExecutionTime * 0.6, 120000);
   
   const contactIdToHubspotId = await validateContactsInParallel(
@@ -36,14 +36,12 @@ export async function sendToHubspot(deals, fileName, maxExecutionTime = 240000) 
 
   console.log(`✅ Contactos válidos encontrados: ${contactIdToHubspotId.size} de ${allContactIds.length}`);
 
-  // Separar deals validos e invalidos
   const { validDeals, invalidDeals } = separateValidDeals(contactIdToDeals, contactIdToHubspotId);
 
   if (invalidDeals.length > 0) {
     logInvalidDeals(invalidDeals);
   }
 
-  // Usar el tiempo restante para procesar deals
   const remainingTime = maxExecutionTime - (Date.now() - startTime);
   
   const result = await processValidDealsWithTimeout(
@@ -113,13 +111,12 @@ async function validateContactsInParallel(contactIds, apiKey, maxTime) {
       contactIdToHubspotId.set(customContactId, hubspotId);
     });
 
-    // Mostrar progreso cada 10 batches
+    // Mostrar progreso
     if ((i / MAX_CONCURRENT_REQUESTS) % 10 === 0) {
       const processed = Math.min(i + MAX_CONCURRENT_REQUESTS, chunks.length);
       console.log(`🔍 Validados ${processed}/${chunks.length} batches de contactos`);
     }
 
-    // evitar rate limits
     await wait(100);
   }
 

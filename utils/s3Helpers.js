@@ -1,3 +1,4 @@
+//Negocios
 // utils/s3Helpers.js
 import {
   S3Client,
@@ -8,7 +9,7 @@ import {
 import csv from "csv-parser";
 import { Readable } from "stream";
 
-// Cliente S3 cuenta Marathon (lectura del CSV)
+// S3 cuenta Marathon (lectura del CSV)
 const s3Read = new S3Client({
   region: process.env.AWS1_REGION,
   credentials: {
@@ -17,7 +18,7 @@ const s3Read = new S3Client({
   },
 });
 
-// Cliente S3 cuenta Advance (guardar historial)
+// S3 cuenta Advance (guardar historial)
 const s3Hist = new S3Client({
   region: process.env.AWS2_REGION,
   credentials: {
@@ -134,7 +135,7 @@ export async function saveReportToS3(content, fileName) {
   console.log(`📝 Reporte guardado como: reportes/${fileName}`);
 }
 
-// Nueva función para guardar progreso parcial
+// guardar progreso parcial
 export async function savePartialProgress(fileName, processedCount, totalCount) {
   const progressKey = `progress/${fileName.replace('.csv', '')}_progress.json`;
   const progressData = {
@@ -154,8 +155,6 @@ export async function savePartialProgress(fileName, processedCount, totalCount) 
   
   await s3Hist.send(command);
 }
-
-// ===== NUEVAS FUNCIONES PARA SISTEMA DE REANUDACIÓN =====
 
 export async function getFileProgress(fileName) {
   try {
@@ -245,7 +244,6 @@ export async function getCompletedChunks(fileName) {
 }
 
 export async function cleanupFileProgress(fileName) {
-  // Limpiar archivos de progreso cuando un archivo se complete exitosamente
   const filesToCleanup = [
     `file_progress/${fileName.replace('.csv', '')}_file_progress.json`,
     `progress/${fileName.replace('.csv', '')}_progress.json`

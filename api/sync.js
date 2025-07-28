@@ -1,3 +1,4 @@
+//Negocios
 // api/sync.js
 import {
   fetchCSVFromS3,
@@ -80,7 +81,6 @@ export default async function handler(req, res) {
     return res.status(200).send("🟡 No hay archivos nuevos.");
   }
 
-  // Procesar solo 1 archivo para evitar timeouts
   const fileName = nuevosArchivos[0];
   
   try {
@@ -93,7 +93,7 @@ export default async function handler(req, res) {
     console.log(`\n⬇️ ================== PROCESANDO ARCHIVO ==================`);
     console.log(`📄 Archivo seleccionado: ${fileName}`);
     
-    // Verificar si el archivo ya tiene progreso parcial
+    // Verificar si ya tiene progreso parcial
     const fileProgress = await getFileProgress(fileName);
     let deals;
     
@@ -126,7 +126,6 @@ export default async function handler(req, res) {
     console.log(`\n📊 ================== ESTRATEGIA DE PROCESAMIENTO ==================`);
     console.log(`📄 Total deals válidos extraídos del CSV: ${deals.length}`);
     
-    // Verificar si el archivo es muy grande y necesita procesamiento parcial
     if (deals.length > 5000) {
       console.log(`📏 ARCHIVO GRANDE detectado (${deals.length} registros) - procesando en chunks`);
       
@@ -141,7 +140,7 @@ export default async function handler(req, res) {
       console.log(`   • Chunks ya completados: ${processedChunks}`);
       console.log(`   • Chunk inicial: ${processedChunks + 1}`);
       
-      // Guardar el total de registros si es la primera vez
+      // Guardar el total de registros
       if (!fileProgress || !fileProgress.totalRecords) {
         console.log(`💾 Guardando metadata inicial del archivo...`);
         await saveFileProgress(fileName, {
@@ -165,14 +164,12 @@ export default async function handler(req, res) {
         console.log(`📊 Deals en este chunk: ${chunk.length}`);
         console.log(`📈 Progreso general: ${((chunkNumber-1)/totalChunks*100).toFixed(1)}%`);
         
-        // Calcular tiempo restante para este chunk
         const elapsedTime = Date.now() - executionStart;
         const remainingTime = MAX_EXECUTION_TIME - elapsedTime;
         
         console.log(`⏰ Tiempo transcurrido: ${Math.round(elapsedTime/1000)}s`);
         console.log(`⏰ Tiempo restante: ${Math.round(remainingTime/1000)}s`);
         
-        // Necesitamos al menos 30 segundos para procesar un chunk
         if (remainingTime < 30000) {
           console.log(`\n⏰ ================== TIMEOUT PREVENTIVO ==================`);
           console.log(`⚠️ Tiempo insuficiente para chunk ${chunkNumber} (${Math.round(remainingTime/1000)}s restantes)`);
@@ -198,7 +195,7 @@ export default async function handler(req, res) {
         console.log(`🚀 Enviando chunk ${chunkNumber} a HubSpot...`);
         const result = await sendToHubspot(chunk, `${fileName}_chunk_${chunkNumber}`, remainingTime);
         
-        // Marcar chunk como completado
+        // chunk como completado
         await markChunkAsCompleted(fileName, chunkNumber, chunk.length);
         processedChunks++;
         totalProcessed += chunk.length;
@@ -219,7 +216,6 @@ export default async function handler(req, res) {
           status: processedChunks === totalChunks ? 'completed' : 'processing'
         });
         
-        // Verificar tiempo después de cada chunk
         const newElapsedTime = Date.now() - executionStart;
         if (newElapsedTime > MAX_EXECUTION_TIME * 0.85) {
           console.log(`\n⏰ ================== LÍMITE DE TIEMPO ALCANZADO ==================`);
@@ -236,7 +232,6 @@ export default async function handler(req, res) {
         }
       }
       
-      // Solo marcar como completamente procesado si se procesaron todos los chunks
       if (processedChunks === totalChunks) {
         console.log(`\n🎉 ================== ARCHIVO COMPLETAMENTE PROCESADO ==================`);
         console.log(`✅ TODOS los chunks procesados exitosamente`);
