@@ -1,7 +1,5 @@
-//Negocios
 // api/sync.js
 import {
-  fetchCSVFromS3,
   readProcessedList,
   saveProcessedList,
   testS3Connections,
@@ -9,17 +7,8 @@ import {
   saveFileProgress,
   markChunkAsCompleted
 } from "../utils/s3Helpers.js";
+import { testSFTPConnection, listCSVFiles, fetchCSVFromSFTP } from "../utils/sftpHelpers.js";
 import { sendToHubspot } from "../utils/hubspot.js";
-import { ListObjectsV2Command, S3Client } from "@aws-sdk/client-s3";
-
-const AWS1_BUCKET = process.env.AWS1_BUCKET;
-const s3Read = new S3Client({
-  region: process.env.AWS1_REGION,
-  credentials: {
-    accessKeyId: process.env.AWS1_ACCESS_KEY_ID,
-    secretAccessKey: process.env.AWS1_SECRET_ACCESS_KEY,
-  },
-});
 
 export const config = {
   runtime: "nodejs",
@@ -34,12 +23,20 @@ export default async function handler(req, res) {
   console.log(`⏰ Tiempo máximo de ejecución: ${Math.round(MAX_EXECUTION_TIME/1000)}s`);
   console.log(`🕒 Inicio: ${new Date().toLocaleString('es-EC')}`);
   
-  console.log("🔌 Verificando conexión con buckets S3...");
+  // Test connections
+  console.log("🔌 Verificando conexiones...");
+  
+  const sftpOk = await testSFTPConnection();
+  if (!sftpOk) {
+    console.error("❌ Error crítico: No se pudo conectar al servidor SFTP");
+    return res.status(500).send("❌ Fallo en conexión SFTP");
+  }
+  console.log("✅ Conexión SFTP exitosa");
 
   const s3Ok = await testS3Connections();
   if (!s3Ok) {
     console.error("❌ Error crítico: No se pudo conectar a los buckets S3");
-    return res.status(500).send("❌ Fallo en conexión a uno o ambos buckets S3.");
+    return res.status(500).send("❌ Fallo en conexión a buckets S3");
   }
   console.log("✅ Conexión a buckets S3 exitosa");
 
@@ -47,20 +44,21 @@ export default async function handler(req, res) {
   const processed = await readProcessedList();
   console.log(`📋 Archivos ya procesados: ${processed.length}`);
 
-  const command = new ListObjectsV2Command({
-    Bucket: AWS1_BUCKET,
-    Prefix: "delta_negocio_",
-  });
+  console.log("📂 Listando archivos desde SFTP...");
+  let sftpFiles;
+  try {
+    sftpFiles = await listCSVFiles();
+  } catch (error) {
+    console.error("❌ Error listando archivos SFTP:", error.message);
+    return res.status(500).send("❌ Error accediendo archivos SFTP");
+  }
 
-  const { Contents = [] } = await s3Read.send(command);
-  const nuevosArchivos = Contents.map((obj) => obj.Key)
-    .filter((key) => key.endsWith(".csv"))
-    .filter((key) => !processed.includes(key))
-    .sort(); 
+  const nuevosArchivos = sftpFiles
+    .filter(fileName => !processed.includes(fileName))
+    .sort();
 
   console.log(`\n📁 ================== ANÁLISIS DE ARCHIVOS ==================`);
-  console.log(`📂 Total archivos en bucket: ${Contents.length}`);
-  console.log(`📄 Archivos CSV encontrados: ${Contents.filter(obj => obj.Key.endsWith('.csv')).length}`);
+  console.log(`📂 Total archivos CSV en SFTP: ${sftpFiles.length}`);
   console.log(`✅ Archivos ya procesados: ${processed.length}`);
   console.log(`🆕 Archivos nuevos para procesar: ${nuevosArchivos.length}`);
   
@@ -109,8 +107,8 @@ export default async function handler(req, res) {
       console.log(`🆕 INICIANDO nuevo procesamiento de ${fileName}`);
     }
     
-    console.log(`\n📥 Descargando y parseando CSV desde S3...`);
-    deals = await fetchCSVFromS3(fileName);
+    console.log(`\n📥 Descargando y parseando CSV desde SFTP...`);
+    deals = await fetchCSVFromSFTP(fileName);
 
     if (!deals.length) {
       console.warn(`⚠️ ARCHIVO VACÍO detectado: ${fileName}`);
@@ -125,6 +123,20 @@ export default async function handler(req, res) {
 
     console.log(`\n📊 ================== ESTRATEGIA DE PROCESAMIENTO ==================`);
     console.log(`📄 Total deals válidos extraídos del CSV: ${deals.length}`);
+    
+    // Mostrar sample de los primeros deals para debugging
+    if (deals.length > 0) {
+      console.log(`\n🔍 ================== MUESTRA DE DEALS ==================`);
+      const sampleDeals = deals.slice(0, 3);
+      sampleDeals.forEach((deal, index) => {
+        console.log(`📋 Deal ${index + 1}:`);
+        console.log(`   • Nombre: "${deal.properties.dealname}"`);
+        console.log(`   • Contact ID: ${deal.associations[0].to.id}`);
+        console.log(`   • Monto: ${deal.properties.amount || 'No especificado'}`);
+        console.log(`   • Propiedades: ${Object.keys(deal.properties).length} campos`);
+      });
+      console.log(`========================================================\n`);
+    }
     
     if (deals.length > 5000) {
       console.log(`📏 ARCHIVO GRANDE detectado (${deals.length} registros) - procesando en chunks`);
@@ -195,7 +207,7 @@ export default async function handler(req, res) {
         console.log(`🚀 Enviando chunk ${chunkNumber} a HubSpot...`);
         const result = await sendToHubspot(chunk, `${fileName}_chunk_${chunkNumber}`, remainingTime);
         
-        // chunk como completado
+        // Marcar chunk como completado
         await markChunkAsCompleted(fileName, chunkNumber, chunk.length);
         processedChunks++;
         totalProcessed += chunk.length;
@@ -205,7 +217,8 @@ export default async function handler(req, res) {
         console.log(`📊 Progreso actualizado:`);
         console.log(`   • Chunks completados: ${processedChunks}/${totalChunks} (${((processedChunks/totalChunks)*100).toFixed(1)}%)`);
         console.log(`   • Registros procesados: ${totalProcessed}/${deals.length} (${((totalProcessed/deals.length)*100).toFixed(1)}%)`);
-        console.log(`   • Deals subidos en este chunk: ${result.totalSubidos || 0}`);
+        console.log(`   • Deals creados exitosamente: ${result.totalSubidos || 0}`);
+        console.log(`   • Deals fallidos: ${result.totalFallidos || 0}`);
         
         // Actualizar progreso
         await saveFileProgress(fileName, {
@@ -262,7 +275,14 @@ export default async function handler(req, res) {
       const remainingTime = MAX_EXECUTION_TIME - (Date.now() - executionStart);
       console.log(`⏰ Tiempo disponible para procesamiento: ${Math.round(remainingTime/1000)}s`);
       
-      await sendToHubspot(deals, fileName, remainingTime);
+      const result = await sendToHubspot(deals, fileName, remainingTime);
+      
+      console.log(`\n📊 ================== RESULTADO FINAL ==================`);
+      console.log(`✅ Deals creados exitosamente: ${result.totalSubidos || 0}`);
+      console.log(`❌ Deals fallidos: ${result.totalFallidos || 0}`);
+      console.log(`📊 Total procesado: ${deals.length}`);
+      console.log(`=======================================================`);
+      
       processed.push(fileName);
       console.log(`✅ Archivo procesado exitosamente: ${fileName}`);
     }
@@ -296,4 +316,3 @@ export default async function handler(req, res) {
   
   return res.status(200).send(response);
 }
-

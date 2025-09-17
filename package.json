@@ -13,6 +13,7 @@
     "csv-parser": "^3.2.0",
     "dayjs": "^1.11.13",
     "dotenv": "^17.2.0",
-    "node-fetch": "^3.3.2"
+    "node-fetch": "^3.3.2",
+    "ssh2-sftp-client": "^10.0.3"
   }
 }
