@@ -1,5 +1,5 @@
 // utils/sftpHelpers.js
-import { Client } from 'ssh2-sftp-client';
+import SftpClient from 'ssh2-sftp-client';
 
 const SFTP_CONFIG = {
   host: process.env.SFTP_HOST,
@@ -12,7 +12,7 @@ const SFTP_CONFIG = {
 };
 
 export async function testSFTPConnection() {
-  const sftp = new Client();
+  const sftp = new SftpClient();
   try {
     console.log(`🔌 Conectando a SFTP: ${SFTP_CONFIG.host}:${SFTP_CONFIG.port}`);
     await sftp.connect(SFTP_CONFIG);
@@ -33,7 +33,7 @@ export async function testSFTPConnection() {
 }
 
 export async function listCSVFiles() {
-  const sftp = new Client();
+  const sftp = new SftpClient();
   try {
     await sftp.connect(SFTP_CONFIG);
     console.log("📂 Listando archivos CSV del servidor SFTP...");
@@ -68,7 +68,7 @@ export async function listCSVFiles() {
 }
 
 export async function fetchCSVFromSFTP(fileName) {
-  const sftp = new Client();
+  const sftp = new SftpClient();
   try {
     console.log(`📥 Descargando ${fileName} desde SFTP...`);
     await sftp.connect(SFTP_CONFIG);
