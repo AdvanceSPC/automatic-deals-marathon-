@@ -11,24 +11,6 @@ const SFTP_CONFIG = {
   retry_factor: 2
 };
 
-function convertDateToHubSpotTimestamp(dateString) {
-  if (!dateString || dateString.trim() === '') return null;
-  
-  try {
-    const [year, month, day] = dateString.split('-').map(Number);
-    const ecuadorDate = new Date(year, month - 1, day, 12, 0, 0);
-    
-    // HubSpot espera el timestamp en milisegundos desde epoch
-    const timestamp = ecuadorDate.getTime();
-    
-    console.log(`📅 Fecha convertida: ${dateString} -> ${timestamp} (${ecuadorDate.toISOString()})`);
-    return timestamp;
-  } catch (error) {
-    console.warn(`⚠️ Error convirtiendo fecha "${dateString}":`, error.message);
-    return null;
-  }
-}
-
 export async function testSFTPConnection() {
   const sftp = new SftpClient();
   try {
@@ -95,11 +77,13 @@ export async function fetchCSVFromSFTP(fileName) {
     const stat = await sftp.stat(`/${fileName}`);
     console.log(`📊 Tamaño del archivo: ${Math.round(stat.size / 1024)}KB`);
     
+    // Descargar como buffer
     const buffer = await sftp.get(`/${fileName}`);
     const csvContent = buffer.toString('utf8');
     
     console.log(`✅ Archivo descargado exitosamente (${csvContent.length} caracteres)`);
     
+    // Parsear CSV manualmente usando el mismo separador ";" que usabas antes
     console.log("🔄 Parseando CSV...");
     const lines = csvContent.split('\n').filter(line => line.trim());
     
@@ -108,21 +92,24 @@ export async function fetchCSVFromSFTP(fileName) {
       return [];
     }
 
+    // Obtener headers de la primera línea
     const headers = lines[0].split(';').map(header => header.trim());
     console.log(`📋 Headers encontrados (${headers.length}): ${headers.slice(0, 5).join(', ')}${headers.length > 5 ? '...' : ''}`);
     
     const deals = [];
     let invalidCount = 0;
-    let dateConversions = 0;
 
+    // Procesar cada línea de datos (empezando desde la línea 1)
     for (let i = 1; i < lines.length; i++) {
       const values = lines[i].split(';').map(value => value.trim());
       
+      // Crear objeto row mapeando headers con values
       const row = {};
       headers.forEach((header, index) => {
         row[header] = values[index] || '';
       });
 
+      // Validar que existe contact_id (igual que en tu código original)
       if (!row.contact_id) {
         invalidCount++;
         if (invalidCount <= 3) {
@@ -131,14 +118,7 @@ export async function fetchCSVFromSFTP(fileName) {
         continue;
       }
 
-      let closedateValue = null;
-      if (row.closedate && row.closedate.trim() !== '') {
-        closedateValue = convertDateToHubSpotTimestamp(row.closedate);
-        if (closedateValue !== null) {
-          dateConversions++;
-        }
-      }
-
+      // Crear deal con EXACTAMENTE la misma estructura que tenías antes
       const deal = {
         properties: {
           dealname: row.linea || null,
@@ -148,7 +128,7 @@ export async function fetchCSVFromSFTP(fileName) {
           provincia_homologada: row.provincia_homologada || null,
           ciudad_centro: row.ciudad_centro || null,
           centro: row.centro || null,
-          closedate: closedateValue, 
+          closedate: row.closedate || null,
           grupo: row.grupo || null,
           marca: row.marca || null,
           equipo: row.equipo || null,
@@ -185,18 +165,8 @@ export async function fetchCSVFromSFTP(fileName) {
     }
 
     console.log(`✅ Deals válidos transformados: ${deals.length}`);
-    console.log(`📅 Fechas convertidas: ${dateConversions} de ${deals.length}`);
-    
     if (deals.length !== (lines.length - 1)) {
       console.warn(`⚠️ Se filtraron ${(lines.length - 1) - deals.length} registros inválidos`);
-    }
-    
-    if (deals.length > 0 && deals[0].properties.closedate) {
-      const exampleDate = new Date(deals[0].properties.closedate);
-      console.log(`📅 Ejemplo de fecha convertida:`);
-      console.log(`   • Timestamp: ${deals[0].properties.closedate}`);
-      console.log(`   • Fecha UTC: ${exampleDate.toISOString()}`);
-      console.log(`   • Fecha Ecuador: ${exampleDate.toLocaleString('es-EC', { timeZone: 'America/Guayaquil' })}`);
     }
     
     return deals;
