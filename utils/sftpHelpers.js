@@ -24,7 +24,6 @@ function parseCloseDateToTimestamp(dateString) {
     // Si NO tiene hora agregar
     if (/^\d{4}-\d{2}-\d{2}$/.test(dateToConvert)) {
       dateToConvert = dateToConvert + ' 12:00:00';
-      console.log(`📅 Fecha sin hora detectada, agregando 12:00:00: ${dateString} → ${dateToConvert}`);
     }
     
     const date = new Date(dateToConvert.replace(' ', 'T'));
