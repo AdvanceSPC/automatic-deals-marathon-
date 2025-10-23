@@ -321,15 +321,6 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
 
     console.log(`\n📦 Procesando batch ${batchNumber}/${totalBatches} (deals ${dealRange})`);
     
-    // Log de sample de deals en el batch para debugging
-    console.log(`🔍 Muestra de deals en batch ${batchNumber}:`);
-    batch.slice(0, 2).forEach((deal, index) => {
-      console.log(`   ${index + 1}. "${deal.properties.dealname}" -> Contacto: ${deal.associations[0].to.id}`);
-    });
-    if (batch.length > 2) {
-      console.log(`   ... y ${batch.length - 2} deals más`);
-    }
-
     try {
       const requestBody = { inputs: batch };
       
@@ -361,7 +352,6 @@ async function processValidDealsWithTimeout(validDeals, apiKey, fileName, remain
             });
           }
         } catch (e) {
-          // Error response no es JSON válido
         }
         
         totalFallidos += batch.length;
